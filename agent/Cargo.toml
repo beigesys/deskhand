@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 ithub-proto = { path = "../proto" }
-voxl = { package = "voxl-server", version = "0.3.4" }
+voxl = { package = "voxl-server", path = "../vendor/voxl" }
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", features = ["sink"] }
@@ -28,4 +28,7 @@ sysinfo = { version = "0.40", default-features = false, features = ["system", "d
 [target.'cfg(windows)'.dependencies]
 wmi = "0.18"
 winreg = "0.56"
-windows = { version = "0.62", features = ["Win32_System_RemoteDesktop", "Win32_Foundation"] }
+windows = { version = "0.62", features = ["Win32_System_RemoteDesktop", "Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Shutdown", "Win32_Security"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

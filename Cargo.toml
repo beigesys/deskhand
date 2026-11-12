@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["proto", "server", "agent"]
+members = ["proto", "server", "agent", "vendor/voxl"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "GPL-2.0-or-later"
+license = "MIT OR Apache-2.0"
 
 [profile.release]
 opt-level = 3

@@ -10,11 +10,12 @@ jobs:
     name: Static ithub-agent.exe and ithub-server.exe
     runs-on: windows-latest
     env:
-      # Static x264, libyuv and Opus with the static C runtime (+crt-static in
+      # Static libvpx and Opus (vcpkg) and OpenH264 (built by its crate) with the static
+      # C runtime (+crt-static in
       # .cargo/config.toml), so the .exe files need no vcruntime140.dll or anything else.
       VCPKGRS_TRIPLET: x64-windows-static
       VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\vcpkg-cache,readwrite
-      # bindgen (x264.h) needs libclang; the runner image has LLVM here.
+      # bindgen (vpx headers) needs libclang; the runner image has LLVM here.
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
       TARGET: x86_64-pc-windows-msvc
     steps:
@@ -25,12 +26,12 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: vcpkg-cache
-          key: vcpkg-${{ runner.os }}-x64-windows-static-x264-libyuv-opus-v1
+          key: vcpkg-${{ runner.os }}-x64-windows-static-libvpx-opus-v1
       - name: Native libraries (vcpkg) and esbuild
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force vcpkg-cache | Out-Null
-          vcpkg install x264 libyuv opus --triplet $env:VCPKGRS_TRIPLET
+          vcpkg install libvpx opus --triplet $env:VCPKGRS_TRIPLET
           "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
           npm install -g esbuild
       - uses: actions/cache@v4
@@ -51,7 +52,7 @@ jobs:
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe |
             Where-Object FullName -like '*Hostx64\x64*' | Select-Object -First 1
-          $deny = '^(vcruntime|msvcp|ucrtbase|concrt|vccorlib|api-ms-win-crt-|libx264|x264|opus|libopus|yuv|libyuv|libgcc|libstdc|libwinpthread)'
+          $deny = '^(vcruntime|msvcp|ucrtbase|concrt|vccorlib|api-ms-win-crt-|vpx|libvpx|opus|libopus|openh264|libgcc|libstdc|libwinpthread)'
           $bad = $false
           foreach ($exe in 'ithub-agent.exe', 'ithub-server.exe') {
             $path = "target\$env:TARGET\release\$exe"

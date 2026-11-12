@@ -4,8 +4,13 @@ Self-hosted remote desktop management, in Rust. Agents on each machine dial out 
 server, so nothing behind NAT needs an open port; you sign in to the server's dashboard
 and open any online device in the browser.
 
-Screen streaming is [voxl](https://github.com/tembo/voxl): H.264 over a WebSocket,
-decoded in the browser with WebCodecs, at up to 60 fps.
+Screen streaming is a fork of [voxl](https://github.com/tembo/voxl) in `vendor/voxl`:
+VP9 (libvpx, real-time screen-content mode) over a WebSocket, decoded in the browser with
+WebCodecs at up to 60 fps. A browser that can't decode VP9 gets H.264 (OpenH264) instead.
+
+Every binary is one static file that needs nothing installed on the host: libvpx,
+OpenH264 and Opus are compiled from source and linked in, colour conversion is Rust (no
+libyuv), and Linux desktop audio speaks PulseAudio's protocol in Rust (no libpulse).
 
 ## How it fits together
 
@@ -23,12 +28,14 @@ decoded in the browser with WebCodecs, at up to 60 fps.
 ## Build (Linux)
 
 ```sh
-sudo apt install libx264-dev libopus-dev libpulse-dev libyuv-dev esbuild pkg-config libclang-dev
-cargo build --release
+sudo apt install nasm cmake esbuild libclang-dev git make   # build machine only
+cargo install cargo-zigbuild                                # and zig (e.g. brew install zig)
+cargo zigbuild --release --target x86_64-unknown-linux-musl -p ithub-agent -p ithub-server
 ```
 
-The server builds as one static binary with `cargo zigbuild --release -p ithub-server
---target x86_64-unknown-linux-musl` (zig compiles the bundled SQLite).
+Both come out statically linked (`file` says so, `ldd` says "not a dynamic executable").
+The first build clones libvpx (pinned tag) into the build directory; set `VPX_SRC` to use
+a local checkout. Windows: see `scripts/build-windows.sh` and `docs/windows.md`.
 
 ## Run
 
@@ -74,4 +81,9 @@ proxy (Caddy, nginx), set `ITHUB_TRUST_PROXY=1`, and enroll agents with `https:/
 
 ## License
 
-GPL-2.0-or-later. voxl is MIT, but it links x264 (GPL-2.0), so the agent binary is GPL.
+MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`). `vendor/voxl` is MIT (its own
+`LICENSE`). The linked codecs are permissive too: libvpx BSD-3-Clause, OpenH264
+BSD-2-Clause, Opus BSD-3-Clause.
+
+H.264 is patent-encumbered; Cisco's patent license covers only its prebuilt OpenH264
+binaries, not this source build. VP9, the default, is royalty-free.

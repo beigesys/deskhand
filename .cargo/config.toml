@@ -5,4 +5,29 @@
 rustflags = ["-C", "target-feature=+crt-static"]
 
 [target.x86_64-pc-windows-gnu]
+# OpenH264 and libvpx are C++: link libstdc++ (and winpthread) from their .a files.
+# CXXSTDLIB_x86_64_pc_windows_gnu below stops the cc crate asking for the DLL.
+rustflags = [
+	"-C", "target-feature=+crt-static",
+	"-C", "link-arg=-static",
+	"-C", "link-arg=-l:libstdc++.a",
+	# What libstdc++.a needs, again after it (rustc's own libs come earlier on the line).
+	"-C", "link-arg=-lgcc",
+	"-C", "link-arg=-lgcc_eh",
+	"-C", "link-arg=-lmingw32",
+	"-C", "link-arg=-lmingwex",
+	"-C", "link-arg=-lmsvcrt",
+	"-C", "link-arg=-lkernel32",
+]
+
+# Linux: a static musl binary. Build with `cargo zigbuild --target x86_64-unknown-linux-musl`
+# so zig compiles the C/C++ (libvpx, OpenH264, Opus) against musl and its own libc++.
+[target.x86_64-unknown-linux-musl]
 rustflags = ["-C", "target-feature=+crt-static"]
+
+[env]
+CXXSTDLIB_x86_64_pc_windows_gnu = ""
+# Build Opus from audiopus_sys's bundled source rather than a system libopus.
+LIBOPUS_NO_PKG = "1"
+# audiopus_sys's bundled Opus asks for an old CMake; current CMake needs this to accept it.
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
