@@ -26,6 +26,14 @@ git clone --recursive <repo-url> deskhand && cd deskhand
 # or, in an existing checkout: git submodule update --init
 ```
 
+The dashboard is a React app (`web/`) that `deskhand-server` embeds, so build it first.
+[Bun](https://bun.sh) is a build-time tool only, like esbuild; the server's `build.rs`
+runs these two commands itself if `web/dist` is missing and `bun` is on `PATH`:
+
+```sh
+cd web && bun install --frozen-lockfile && bun run build && cd ..
+```
+
 Linux, static musl binaries:
 
 ```sh
@@ -80,6 +88,41 @@ while developing.
 The device list shows each machine online or offline. **Desktop** opens its screen
 (`/d/{id}/`); **Shell** opens a terminal on it (`/d/{id}/shell`: PowerShell on Windows,
 `$SHELL` elsewhere). Click the device name for its inventory.
+
+## The web app
+
+- `web/`: React 19, TypeScript, Tailwind v4, TanStack Router and Query, Radix primitives
+  styled as Deskhand's own (no stock shadcn look), CodeMirror for scripts. Built with
+  bun and Vite into `web/dist`, which `deskhand-server` embeds; the server serves it at
+  `/` and answers `/api/v1` (JSON, same cookie sessions and roles).
+- Look: `web/src/theme.css` holds every color, font, radius and density value. Palettes
+  (Graphite, Harbor, Field, Paper, Navy) each set the sidebar, the accent and the page
+  neutrals for light and dark; each user picks one in the user menu (kept in that
+  browser). Admins see the tokens and components at `/style`.
+- Lists never load everything: every list endpoint takes `?q=&cursor=&limit=&ids=` and
+  answers `{items, next_cursor}`, searched and keyset-paged in SQL. Pickers are one
+  searchable, infinitely scrolling combobox (`AsyncCombobox`) with recent picks first.
+- Phones: a top bar with the page's title and main action, the sidebar as a drawer, and
+  tables as stacked cards.
+- The server-rendered pages from before the web app are still at `/classic/`.
+
+Develop with the Rust server on 8080 and Vite's dev server in front of it:
+
+```sh
+DESKHAND_ADMIN_PASSWORD=admin-password cargo run -p deskhand-server   # terminal 1
+cd web && bun run dev                                                 # terminal 2: http://localhost:5173
+```
+
+Tests:
+
+```sh
+cargo test -p deskhand-server       # unit tests, plus tests/api.rs: the API end to end and 5,000 devices
+cd web && bun run typecheck
+scripts/e2e-web.sh                  # Playwright: server + agent on Xvfb; sign in, devices, run a script, phone layout, 5,000-device picker
+```
+
+`scripts/e2e-web.sh` needs Xvfb and Playwright's Chromium (`bunx playwright install
+chromium`, or `PW_CHROMIUM=/path/to/chrome`); `DESKHAND_SHOTS=DIR` saves screenshots.
 
 ## Jobs and scripts
 

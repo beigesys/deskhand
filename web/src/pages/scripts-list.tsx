@@ -1,21 +1,26 @@
+import * as React from 'react';
 import { Link } from '@tanstack/react-router';
 import { Plus } from 'lucide-react';
 import { useCan, useScripts } from '@/api/hooks';
 import { Button } from '@/components/ui/button';
 import { Chip, Empty, PageHeader } from '@/components/ui/display';
 import { Table, Td, Th, Tr } from '@/components/ui/table';
+import { LoadMore } from '@/components/ui/load-more';
+import { SearchBox, useDebounce } from '@/components/ui/search';
 import { ago } from '@/lib/utils';
 
 export function ScriptsPage() {
-	const scripts = useScripts();
+	const [text, setText] = React.useState('');
+	const q = useDebounce(text);
+	const scripts = useScripts(q);
 	const canEdit = useCan('operator');
-	const list = scripts.data ?? [];
+	const list = scripts.items;
 	return (
 		<>
 			<PageHeader
 				title="Scripts"
 				sub="Reusable scripts to run on devices."
-				actions={
+				primary={
 					canEdit && (
 						<Button variant="primary" asChild>
 							<Link to="/scripts/$id" params={{ id: 'new' }}>
@@ -25,9 +30,10 @@ export function ScriptsPage() {
 					)
 				}
 			/>
+			<SearchBox value={text} onChange={setText} placeholder="Search scripts…" />
 			<div className="rounded border border-line bg-surface">
 				{list.length === 0 ? (
-					<Empty>{scripts.isLoading ? 'Loading…' : 'No scripts yet.'}</Empty>
+					<Empty>{scripts.isLoading ? 'Loading…' : q ? 'No scripts match.' : 'No scripts yet.'}</Empty>
 				) : (
 					<Table>
 						<thead>
@@ -58,6 +64,7 @@ export function ScriptsPage() {
 						</tbody>
 					</Table>
 				)}
+				<LoadMore hasNextPage={!!scripts.hasNextPage} isFetchingNextPage={scripts.isFetchingNextPage} fetchNextPage={scripts.fetchNextPage} />
 			</div>
 		</>
 	);

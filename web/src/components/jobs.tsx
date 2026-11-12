@@ -1,12 +1,13 @@
 import * as React from 'react';
 import { useNavigate } from '@tanstack/react-router';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import { keys, useAction, useDevices, useGroups, useScripts } from '@/api/hooks';
-import type { Device, JobKind, NewJob } from '@/api/types';
+import { keys, useAction } from '@/api/hooks';
+import type { Device, Group, JobKind, NewJob, Page, Script } from '@/api/types';
+import { AsyncCombobox, deviceOption, groupOption, scriptOption } from '@/components/ui/async-combobox';
 import { Button } from '@/components/ui/button';
 import { Field, Input, Select } from '@/components/ui/form';
 import { Dialog, DialogContent, DialogFooter } from '@/components/ui/overlay';
-import { Chip } from '@/components/ui/display';
 
 export const ACTIONS: { value: Exclude<JobKind, 'script'>; label: string }[] = [
 	{ value: 'reboot', label: 'Reboot' },
@@ -17,13 +18,42 @@ export const ACTIONS: { value: Exclude<JobKind, 'script'>; label: string }[] = [
 ];
 
 /** What the typed confirmation must be for reboot/shutdown: hostname, or the count. */
-export function confirmText(devices: Device[]): string {
+export function confirmText(devices: Pick<Device, 'hostname'>[]): string {
 	return devices.length === 1 ? devices[0].hostname : String(devices.length);
+}
+
+function Segmented<T extends string>({
+	value,
+	onChange,
+	options,
+	label,
+}: {
+	value: T;
+	onChange: (v: T) => void;
+	options: { value: T; label: string }[];
+	label: string;
+}) {
+	return (
+		<div role="radiogroup" aria-label={label} className="inline-flex rounded border border-line bg-surface p-0.5">
+			{options.map((o) => (
+				<button
+					key={o.value}
+					type="button"
+					role="radio"
+					aria-checked={value === o.value}
+					onClick={() => onChange(o.value)}
+					className="h-[calc(var(--dh-control)-6px)] rounded-sm px-3 text-[13px] text-muted aria-checked:bg-chip aria-checked:font-medium aria-checked:text-fg"
+				>
+					{o.label}
+				</button>
+			))}
+		</div>
+	);
 }
 
 /**
  * Run a script or power action. With `devices`, it targets exactly those; otherwise the
- * user picks devices, a group or everything.
+ * user picks devices (searchable), a group, or everything.
  */
 export function RunDialog({
 	open,
@@ -36,14 +66,13 @@ export function RunDialog({
 	devices?: Device[];
 	initial?: { source?: string };
 }) {
-	const scripts = useScripts();
-	const groups = useGroups();
-	const all = useDevices();
 	const navigate = useNavigate();
-	const [source, setSource] = React.useState(initial?.source ?? '');
+	const [what, setWhat] = React.useState<'script' | 'action'>('script');
+	const [scriptId, setScriptId] = React.useState<string | null>(null);
+	const [action, setAction] = React.useState<Exclude<JobKind, 'script'>>('reboot');
 	const [target, setTarget] = React.useState<'devices' | 'group' | 'all'>('devices');
 	const [picked, setPicked] = React.useState<string[]>([]);
-	const [group, setGroup] = React.useState('');
+	const [group, setGroup] = React.useState<string | null>(null);
 	const [when, setWhen] = React.useState<'now' | 'cron'>('now');
 	const [cron, setCron] = React.useState('0 3 * * *');
 	const [delay, setDelay] = React.useState('0');
@@ -52,31 +81,45 @@ export function RunDialog({
 	const [name, setName] = React.useState('');
 
 	React.useEffect(() => {
-		if (open) {
-			setSource(initial?.source ?? '');
-			setConfirm('');
-			setPicked([]);
-			setTarget('devices');
-			setWhen('now');
+		if (!open) return;
+		const src = initial?.source ?? '';
+		if (src.startsWith('action:')) {
+			setWhat('action');
+			setAction(src.slice(7) as Exclude<JobKind, 'script'>);
+		} else {
+			setWhat('script');
+			setScriptId(src.startsWith('script:') ? src.slice(7) : null);
 		}
+		setConfirm('');
+		setPicked([]);
+		setGroup(null);
+		setTarget('devices');
+		setWhen('now');
 	}, [open, initial?.source]);
 
-	const action = source.startsWith('action:') ? (source.slice(7) as Exclude<JobKind, 'script'>) : null;
-	const scriptId = source.startsWith('script:') ? Number(source.slice(7)) : null;
-	const power = action === 'reboot' || action === 'shutdown';
-	const targetDevices: Device[] = fixed
-		? fixed
-		: target === 'devices'
-			? (all.data ?? []).filter((d) => picked.includes(d.id))
-			: target === 'group'
-				? (all.data ?? []).filter((d) => String(d.group_id) === group)
-				: (all.data ?? []);
-	const need = power ? confirmText(targetDevices) : '';
+	const power = what === 'action' && (action === 'reboot' || action === 'shutdown');
+
+	// How many devices it reaches, and for one device its hostname (the confirmation).
+	const reach = useQuery({
+		queryKey: ['run-reach', fixed?.map((d) => d.id) ?? null, target, picked, group],
+		enabled: open && !fixed,
+		queryFn: async () => {
+			const params =
+				target === 'all' ? '' : target === 'group' ? (group ? `group=${group}` : 'ids=') : `ids=${picked.join(',')}`;
+			if ((target === 'devices' && !picked.length) || (target === 'group' && !group)) return { total: 0, one: null };
+			const p = await api.get<Page<Device>>(`/devices?${params}&limit=1`);
+			return { total: p.total ?? 0, one: p.total === 1 ? p.items[0] : null };
+		},
+	});
+	const count = fixed ? fixed.length : (reach.data?.total ?? 0);
+	const one = fixed ? (fixed.length === 1 ? fixed[0] : null) : (reach.data?.one ?? null);
+	const need = power ? (count === 1 && one ? one.hostname : String(count)) : '';
 	const confirmed = !power || confirm.trim().toLowerCase() === need.toLowerCase();
+	const ready = (what === 'action' || scriptId) && count > 0 && confirmed;
 
 	const create = useAction((j: NewJob) => api.post<{ id: number }>('/jobs', j), {
 		invalidate: [keys.jobs],
-		success: 'Job started',
+		success: (_, j) => (j.cron ? 'Job scheduled' : 'Job started'),
 		onSuccess: (r) => {
 			onOpenChange(false);
 			navigate({ to: '/jobs/$id', params: { id: String(r.id) } });
@@ -86,9 +129,10 @@ export function RunDialog({
 	function submit(e: React.FormEvent) {
 		e.preventDefault();
 		const j: NewJob = {};
-		if (scriptId) j.script_id = scriptId;
-		if (action) j.action = action;
-		if (fixed || target === 'devices') j.devices = targetDevices.map((d) => d.id);
+		if (what === 'script') j.script_id = Number(scriptId);
+		else j.action = action;
+		if (fixed) j.devices = fixed.map((d) => d.id);
+		else if (target === 'devices') j.devices = picked;
 		else if (target === 'group') j.group_id = Number(group);
 		else j.all = true;
 		if (when === 'cron') j.cron = cron;
@@ -109,75 +153,88 @@ export function RunDialog({
 				className="max-w-xl"
 			>
 				<form onSubmit={submit} className="grid gap-3">
-					<Field label="What">
-						<Select value={source} onChange={(e) => setSource(e.target.value)} required>
-							<option value="">Pick a script or action…</option>
-							<optgroup label="Scripts">
-								{(scripts.data ?? []).map((s) => (
-									<option key={s.id} value={`script:${s.id}`}>
-										{s.name} ({s.shell})
-									</option>
-								))}
-							</optgroup>
-							<optgroup label="Power and session">
+					<Segmented
+						label="What to run"
+						value={what}
+						onChange={setWhat}
+						options={[
+							{ value: 'script', label: 'Script' },
+							{ value: 'action', label: 'Power or session' },
+						]}
+					/>
+					{what === 'script' ? (
+						<Field label="Script">
+							<AsyncCombobox<Script>
+								endpoint="/scripts"
+								toOption={scriptOption}
+								value={scriptId}
+								onChange={(v) => setScriptId(v)}
+								placeholder="Pick a script…"
+								searchPlaceholder="Search scripts…"
+								aria-label="Script"
+							/>
+						</Field>
+					) : (
+						<Field label="Action">
+							<Select value={action} onChange={(e) => setAction(e.target.value as typeof action)}>
 								{ACTIONS.map((a) => (
-									<option key={a.value} value={`action:${a.value}`}>
+									<option key={a.value} value={a.value}>
 										{a.label}
 									</option>
 								))}
-							</optgroup>
-						</Select>
-					</Field>
+							</Select>
+						</Field>
+					)}
 
 					{!fixed && (
-						<div className="grid gap-2 sm:grid-cols-[160px_1fr]">
-							<Field label="Target">
-								<Select value={target} onChange={(e) => setTarget(e.target.value as typeof target)}>
-									<option value="devices">Pick devices</option>
-									<option value="group">A group</option>
-									<option value="all">All devices</option>
-								</Select>
-							</Field>
-							{target === 'group' && (
-								<Field label="Group">
-									<Select value={group} onChange={(e) => setGroup(e.target.value)} required>
-										<option value="">Pick a group…</option>
-										{(groups.data ?? []).map((g) => (
-											<option key={g.id} value={g.id}>
-												{g.name} ({g.devices})
-											</option>
-										))}
-									</Select>
-								</Field>
+						<>
+							<Segmented
+								label="Target"
+								value={target}
+								onChange={setTarget}
+								options={[
+									{ value: 'devices', label: 'Devices' },
+									{ value: 'group', label: 'Group' },
+									{ value: 'all', label: 'All devices' },
+								]}
+							/>
+							{target === 'devices' && (
+								<AsyncCombobox<Device>
+									multiple
+									endpoint="/devices"
+									toOption={deviceOption}
+									value={picked}
+									onChange={(v) => setPicked(v)}
+									placeholder="Pick devices…"
+									searchPlaceholder="Search name, IP, serial…"
+									aria-label="Devices"
+								/>
 							)}
-						</div>
-					)}
-					{!fixed && target === 'devices' && (
-						<div className="max-h-48 overflow-y-auto rounded border border-line">
-							{(all.data ?? []).map((d) => (
-								<label key={d.id} className="flex h-8 cursor-pointer items-center gap-2 border-b border-line px-2 last:border-0 hover:bg-surface-2">
-									<input
-										type="checkbox"
-										className="accent-[var(--dh-signal)]"
-										checked={picked.includes(d.id)}
-										onChange={(e) =>
-											setPicked((p) => (e.target.checked ? [...p, d.id] : p.filter((x) => x !== d.id)))
-										}
-									/>
-									<span className={d.online ? 'text-ok' : 'text-off'}>●</span>
-									<span className="flex-1 truncate">{d.name}</span>
-									<Chip>{d.os}</Chip>
-								</label>
-							))}
-						</div>
+							{target === 'group' && (
+								<AsyncCombobox<Group>
+									endpoint="/groups"
+									toOption={groupOption}
+									value={group}
+									onChange={(v) => setGroup(v)}
+									placeholder="Pick a group…"
+									searchPlaceholder="Search groups…"
+									aria-label="Group"
+								/>
+							)}
+						</>
 					)}
 
-					<div className="grid gap-2 sm:grid-cols-[160px_1fr]">
+					<div className="grid gap-2 sm:grid-cols-[auto_1fr] sm:items-end">
 						<Field label="When">
-							<Select value={when} onChange={(e) => setWhen(e.target.value as typeof when)}>
-								<option value="now">Now</option>
-								<option value="cron">On a schedule</option>
-							</Select>
+							<Segmented
+								label="When"
+								value={when}
+								onChange={setWhen}
+								options={[
+									{ value: 'now', label: 'Now' },
+									{ value: 'cron', label: 'Schedule' },
+								]}
+							/>
 						</Field>
 						{when === 'cron' && (
 							<Field label="Cron (UTC)" hint="minute hour day month weekday">
@@ -201,14 +258,13 @@ export function RunDialog({
 						<Input value={name} onChange={(e) => setName(e.target.value)} />
 					</Field>
 
-					{power && targetDevices.length > 0 && (
+					{power && count > 0 && (
 						<div className="rounded border border-signal/50 bg-signal-soft p-3">
 							<Field
 								label={`Confirm ${action}`}
 								hint={
 									<>
-										{targetDevices.length === 1 ? 'Type the hostname' : 'Type the number of devices'}:{' '}
-										<code className="chip">{need}</code>
+										{count === 1 ? 'Type the hostname' : 'Type the number of devices'}: <code className="chip">{need}</code>
 									</>
 								}
 							>
@@ -219,16 +275,12 @@ export function RunDialog({
 
 					<DialogFooter>
 						<span className="mr-auto self-center text-xs text-muted">
-							{targetDevices.length} device{targetDevices.length === 1 ? '' : 's'}
+							{count} device{count === 1 ? '' : 's'}
 						</span>
 						<Button variant="ghost" onClick={() => onOpenChange(false)}>
 							Cancel
 						</Button>
-						<Button
-							type="submit"
-							variant={power ? 'danger' : 'primary'}
-							disabled={!source || !targetDevices.length || !confirmed || create.isPending}
-						>
+						<Button type="submit" variant={power ? 'danger' : 'primary'} disabled={!ready || create.isPending}>
 							{when === 'cron' ? 'Schedule' : power ? `${action === 'reboot' ? 'Reboot' : 'Shut down'} now` : 'Run now'}
 						</Button>
 					</DialogFooter>

@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc --noEmit -p . && vite build",
     "typecheck": "tsc --noEmit -p .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "@codemirror/language": "6.13.1",
@@ -21,6 +22,7 @@
     "@uiw/react-codemirror": "4.25.12",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
+    "cmdk": "1.1.1",
     "lucide-react": "1.72.0",
     "radix-ui": "1.8.1",
     "react": "19.3.1",
@@ -29,6 +31,7 @@
     "tailwind-merge": "3.7.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.65.0",
     "@tailwindcss/vite": "4.3.5",
     "@types/node": "26.6.6",
     "@types/react": "19.3.0",

@@ -5,11 +5,12 @@ import { RouterProvider } from '@tanstack/react-router';
 import { Toaster } from 'sonner';
 import { ApiError } from '@/api/client';
 import { TooltipProvider } from '@/components/ui/overlay';
-import { applyTheme } from '@/lib/theme';
+import { applyPalette, applyTheme } from '@/lib/theme';
 import { router } from '@/router';
 import './index.css';
 
 applyTheme();
+applyPalette();
 
 const queryClient = new QueryClient({
 	defaultOptions: {

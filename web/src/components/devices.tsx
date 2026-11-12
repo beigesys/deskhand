@@ -33,3 +33,14 @@ export function AttentionBadges({ d, max = 3 }: { d: Pick<Device, 'attention'>; 
 export function OsChip({ d }: { d: Pick<Device, 'os'> }) {
 	return <Chip title={d.os}>{d.os}</Chip>;
 }
+
+/** The attention reasons as one colored line: red for security, amber for the rest. */
+export function AttentionFlag({ d }: { d: Pick<Device, 'attention'> }) {
+	if (!d.attention.length) return <span className="text-muted">—</span>;
+	const bad = d.attention.some((a) => a === 'firewall_off' || a === 'av_off');
+	return (
+		<span className={bad ? 'text-[11.5px] font-medium text-bad' : 'text-[11.5px] font-medium text-warn'}>
+			{d.attention.map((a) => attentionLabel[a] ?? a).join(' · ')}
+		</span>
+	);
+}

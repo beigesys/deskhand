@@ -11,16 +11,16 @@ import { Logo } from '@/components/layout/AppShell';
 function AuthFrame({ title, children }: { title: string; children: React.ReactNode }) {
 	return (
 		<div className="grid min-h-dvh md:grid-cols-[minmax(280px,420px)_1fr]">
-			<div className="hidden flex-col justify-between bg-side p-8 text-side-fg md:flex">
-				<Logo className="text-white" />
+			<div className="hidden flex-col justify-between border-r border-rail-border bg-rail p-8 text-rail-fg md:flex">
+				<Logo className="text-rail-strong" />
 				<div>
-					<div className="label-caps !text-side-muted">Remote management</div>
-					<p className="mt-2 max-w-xs text-[15px] leading-relaxed text-white">
+					<div className="label-caps !text-rail-dim">Remote management</div>
+					<p className="mt-2 max-w-xs text-[15px] leading-relaxed text-rail-strong">
 						Every machine in the fleet, one static binary on each.
 					</p>
 					<div className="mt-6 h-1 w-16 bg-signal" />
 				</div>
-				<div className="font-mono text-[11px] text-side-muted">deskhand.sh</div>
+				<div className="font-mono text-[11px] text-rail-dim">deskhand.sh</div>
 			</div>
 			<div className="grid place-items-center p-4">
 				<div className="w-full max-w-sm">
@@ -62,7 +62,7 @@ export function LoginPage() {
 		try {
 			const me = await api.post<Me>('/login', { username: f.get('username'), password: f.get('password') });
 			qc.setQueryData(keys.me, me);
-			navigate({ to: next && next.startsWith('/') ? next : '/' });
+			navigate({ to: next && /^\/(?!\/|login|setup)/.test(next) ? next : '/' });
 		} catch (err) {
 			setError(err instanceof ApiError ? err.message : 'Sign-in failed.');
 		} finally {

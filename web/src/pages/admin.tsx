@@ -2,8 +2,11 @@ import * as React from 'react';
 import { Link } from '@tanstack/react-router';
 import { Check, Copy, Plus, Trash2, Unlink } from 'lucide-react';
 import { api } from '@/api/client';
-import { keys, useAction, useAudit, useCan, useGroups, useMe, useTokens, useUsers } from '@/api/hooks';
-import type { AuditPage as AuditPageData, AuditRow, NewEnrollToken, Role } from '@/api/types';
+import { keys, useAction, useAudit, useCan, useGroups, useMe, useSsoEnabled, useTokens, useUsers } from '@/api/hooks';
+import type { Device, Group, NewEnrollToken, Role, User } from '@/api/types';
+import { AsyncCombobox, deviceOption, groupOption, NO_GROUP, userOption, type Option } from '@/components/ui/async-combobox';
+import { LoadMore } from '@/components/ui/load-more';
+import { SearchBox, useDebounce } from '@/components/ui/search';
 import { Button } from '@/components/ui/button';
 import { Confirm } from '@/components/ui/confirm';
 import { Badge, Empty, PageHeader, Panel } from '@/components/ui/display';
@@ -19,7 +22,9 @@ function AdminOnly({ children }: { children: React.ReactNode }) {
 // --- groups ---
 
 export function GroupsPage() {
-	const groups = useGroups();
+	const [text, setText] = React.useState('');
+	const q = useDebounce(text);
+	const groups = useGroups(q);
 	const [deleting, setDeleting] = React.useState<{ id: number; name: string } | null>(null);
 	const add = useAction((name: string) => api.post('/groups', { name }), { invalidate: [keys.groups], success: 'Group added' });
 	const del = useAction((id: number) => api.del(`/groups/${id}`), {
@@ -31,9 +36,11 @@ export function GroupsPage() {
 		<AdminOnly>
 			<PageHeader title="Groups" sub="Group devices by site, team or role. Jobs and enrollment tokens can target a group." />
 			<div className="grid gap-3 lg:grid-cols-[1fr_320px]">
-				<div className="rounded border border-line bg-surface">
-					{!groups.data?.length ? (
-						<Empty>No groups yet.</Empty>
+				<div>
+					<SearchBox value={text} onChange={setText} placeholder="Search groups…" />
+					<div className="rounded border border-line bg-surface">
+					{!groups.items.length ? (
+						<Empty>{groups.isLoading ? 'Loading…' : q ? 'No groups match.' : 'No groups yet.'}</Empty>
 					) : (
 						<Table>
 							<thead>
@@ -44,7 +51,7 @@ export function GroupsPage() {
 								</tr>
 							</thead>
 							<tbody>
-								{groups.data.map((g) => (
+								{groups.items.map((g) => (
 									<Tr key={g.id}>
 										<Td>
 											<Link to="/devices" search={{ group: String(g.id) }} className="font-medium hover:text-signal">
@@ -62,6 +69,8 @@ export function GroupsPage() {
 							</tbody>
 						</Table>
 					)}
+					<LoadMore hasNextPage={!!groups.hasNextPage} isFetchingNextPage={groups.isFetchingNextPage} fetchNextPage={groups.fetchNextPage} />
+					</div>
 				</div>
 				<Panel title="Add a group">
 					<form
@@ -114,7 +123,7 @@ function CopyBlock({ label, text }: { label: string; text: string }) {
 					{done ? <Check /> : <Copy />} {done ? 'Copied' : 'Copy'}
 				</Button>
 			</div>
-			<pre className="overflow-x-auto whitespace-pre-wrap break-all rounded border border-navy-800 bg-navy-950 p-3 font-mono text-xs text-[#d7e0ec]">
+			<pre className="overflow-x-auto whitespace-pre-wrap break-all rounded border border-line bg-term p-3 font-mono text-xs text-term-fg">
 				{text}
 			</pre>
 		</div>
@@ -123,7 +132,7 @@ function CopyBlock({ label, text }: { label: string; text: string }) {
 
 export function EnrollPage() {
 	const tokens = useTokens();
-	const groups = useGroups();
+	const [group, setGroup] = React.useState<string | null>(null);
 	const [created, setCreated] = React.useState<NewEnrollToken | null>(null);
 	const add = useAction(
 		(b: { group_id: number | null; hours: number; max_uses: number }) => api.post<NewEnrollToken>('/enroll-tokens', b),
@@ -140,19 +149,23 @@ export function EnrollPage() {
 						onSubmit={(e) => {
 							e.preventDefault();
 							const f = new FormData(e.currentTarget);
-							const g = String(f.get('group'));
-							add.mutate({ group_id: g ? Number(g) : null, hours: Number(f.get('hours')), max_uses: Number(f.get('max_uses')) });
+							add.mutate({
+								group_id: group && group !== 'none' ? Number(group) : null,
+								hours: Number(f.get('hours')),
+								max_uses: Number(f.get('max_uses')),
+							});
 						}}
 					>
 						<Field label="Group">
-							<Select name="group" defaultValue="">
-								<option value="">No group</option>
-								{(groups.data ?? []).map((g) => (
-									<option key={g.id} value={g.id}>
-										{g.name}
-									</option>
-								))}
-							</Select>
+							<AsyncCombobox<Group>
+								endpoint="/groups"
+								toOption={groupOption}
+								extra={[NO_GROUP]}
+								value={group ?? 'none'}
+								onChange={setGroup}
+								searchPlaceholder="Search groups…"
+								aria-label="Group"
+							/>
 						</Field>
 						<Field label="Expires in">
 							<Select name="hours" defaultValue="24">
@@ -189,7 +202,7 @@ export function EnrollPage() {
 						</Panel>
 					)}
 					<Panel title="Active tokens" bodyClassName="p-0">
-						{!tokens.data?.length ? (
+						{!tokens.items.length ? (
 							<Empty>None.</Empty>
 						) : (
 							<Table>
@@ -202,7 +215,7 @@ export function EnrollPage() {
 									</tr>
 								</thead>
 								<tbody>
-									{tokens.data.map((t) => (
+									{tokens.items.map((t) => (
 										<Tr key={t.id}>
 											<Td>{t.group ?? <span className="text-muted">No group</span>}</Td>
 											<Td className="font-mono text-xs tabular">
@@ -256,7 +269,10 @@ function EmailCell({ id, email }: { id: number; email: string | null }) {
 }
 
 export function UsersPage() {
-	const users = useUsers();
+	const [text, setText] = React.useState('');
+	const q = useDebounce(text);
+	const users = useUsers(q);
+	const ssoQ = useSsoEnabled();
 	const me = useMe();
 	const [deleting, setDeleting] = React.useState<{ id: number; username: string } | null>(null);
 	const add = useAction(
@@ -277,11 +293,13 @@ export function UsersPage() {
 		success: 'User deleted',
 		onSuccess: () => setDeleting(null),
 	});
-	const sso = users.data?.sso_enabled ?? false;
+	const sso = ssoQ.data ?? false;
 	return (
 		<AdminOnly>
 			<PageHeader title="Users" sub="Viewers see devices. Operators can also open desktops and shells and run jobs. Admins manage everything." />
 			<div className="grid gap-3 xl:grid-cols-[1fr_320px]">
+				<div>
+				<SearchBox value={text} onChange={setText} placeholder="Search users or email…" />
 				<div className="rounded border border-line bg-surface">
 					<Table>
 						<thead>
@@ -295,7 +313,7 @@ export function UsersPage() {
 							</tr>
 						</thead>
 						<tbody>
-							{(users.data?.users ?? []).map((u) => (
+							{users.items.map((u) => (
 								<Tr key={u.id}>
 									<Td className="font-medium">
 										{u.username}
@@ -351,6 +369,8 @@ export function UsersPage() {
 							))}
 						</tbody>
 					</Table>
+					<LoadMore hasNextPage={!!users.hasNextPage} isFetchingNextPage={users.isFetchingNextPage} fetchNextPage={users.fetchNextPage} />
+				</div>
 				</div>
 				<Panel title="Add a user">
 					<form
@@ -406,45 +426,68 @@ export function UsersPage() {
 
 // --- audit ---
 
+const actionOption = (a: { id: string; name: string }): Option => ({ id: a.id, label: a.name });
+
 export function AuditPage() {
-	const [action, setAction] = React.useState('');
-	const [q, setQ] = React.useState('');
+	const [action, setAction] = React.useState<string | null>(null);
+	const [user, setUser] = React.useState<string | null>(null);
+	const [device, setDevice] = React.useState<string | null>(null);
 	const [text, setText] = React.useState('');
-	const [extra, setExtra] = React.useState<AuditRow[]>([]);
-	const [next, setNext] = React.useState<number | null>(null);
-	const page = useAudit({ action, q });
-	React.useEffect(() => {
-		setExtra([]);
-		setNext(page.data?.next ?? null);
-	}, [page.data]);
-	React.useEffect(() => {
-		const t = setTimeout(() => setQ(text), 250);
-		return () => clearTimeout(t);
-	}, [text]);
-	async function more() {
-		if (!next) return;
-		const p = await api.get<AuditPageData>(
-			`/audit?${new URLSearchParams({ action, q, before: String(next), limit: '100' })}`,
-		);
-		setExtra((x) => [...x, ...p.rows]);
-		setNext(p.next);
-	}
-	const rows = [...(page.data?.rows ?? []), ...extra];
+	const q = useDebounce(text, 250);
+	const audit = useAudit({ action: action ?? undefined, user: user ?? undefined, device: device ?? undefined, q });
+	const rows = audit.items;
+	const filtered = !!(action || user || device || q);
 	return (
 		<AdminOnly>
 			<PageHeader title="Audit log" sub="Who did what, newest first." />
-			<div className="mb-3 flex flex-wrap gap-2">
-				<Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Search user, device, detail…" className="w-64" aria-label="Search" />
-				<Select className="w-auto" value={action} onChange={(e) => setAction(e.target.value)} aria-label="Action">
-					<option value="">All actions</option>
-					{(page.data?.actions ?? []).map((a) => (
-						<option key={a}>{a}</option>
-					))}
-				</Select>
+			<div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(200px,1fr)_200px_200px_200px_auto]">
+				<Input value={text} onChange={(e) => setText(e.target.value)} type="search" placeholder="Search user, device, detail…" aria-label="Search" />
+				<AsyncCombobox<User>
+					endpoint="/users"
+					kind="audit-user"
+					toOption={userOption}
+					value={user}
+					onChange={setUser}
+					placeholder="Any user"
+					searchPlaceholder="Search users…"
+					aria-label="User"
+				/>
+				<AsyncCombobox<Device>
+					endpoint="/devices"
+					kind="audit-device"
+					toOption={deviceOption}
+					value={device}
+					onChange={setDevice}
+					placeholder="Any device"
+					searchPlaceholder="Search devices…"
+					aria-label="Device"
+				/>
+				<AsyncCombobox<{ id: string; name: string }>
+					endpoint="/audit/actions"
+					toOption={actionOption}
+					value={action}
+					onChange={setAction}
+					placeholder="Any action"
+					searchPlaceholder="Search actions…"
+					aria-label="Action"
+				/>
+				{filtered && (
+					<Button
+						variant="ghost"
+						onClick={() => {
+							setAction(null);
+							setUser(null);
+							setDevice(null);
+							setText('');
+						}}
+					>
+						Clear
+					</Button>
+				)}
 			</div>
 			<div className="rounded border border-line bg-surface">
 				{rows.length === 0 ? (
-					<Empty>{page.isLoading ? 'Loading…' : 'Nothing matches.'}</Empty>
+					<Empty>{audit.isLoading ? 'Loading…' : 'Nothing matches.'}</Empty>
 				) : (
 					<Table>
 						<thead>
@@ -459,9 +502,7 @@ export function AuditPage() {
 						<tbody>
 							{rows.map((r) => (
 								<Tr key={r.id}>
-									<Td className="font-mono text-xs text-muted" title={datetime(r.ts)}>
-										{datetime(r.ts)}
-									</Td>
+									<Td className="font-mono text-xs text-muted">{datetime(r.ts)}</Td>
 									<Td>{r.user ?? <span className="text-subtle">—</span>}</Td>
 									<Td>
 										<Badge tone={r.action.includes('failed') || r.action.includes('delete') ? 'bad' : r.action.startsWith('login') ? 'ok' : 'neutral'}>
@@ -477,12 +518,8 @@ export function AuditPage() {
 						</tbody>
 					</Table>
 				)}
+				<LoadMore hasNextPage={!!audit.hasNextPage} isFetchingNextPage={audit.isFetchingNextPage} fetchNextPage={audit.fetchNextPage} />
 			</div>
-			{next && (
-				<div className="mt-3 flex justify-center">
-					<Button onClick={more}>Load more</Button>
-				</div>
-			)}
 		</AdminOnly>
 	);
 }

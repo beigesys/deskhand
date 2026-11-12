@@ -3,31 +3,32 @@ import { Play, Power, Trash2 } from 'lucide-react';
 import { useCan } from '@/api/hooks';
 import { AttentionBadges, barColor } from '@/components/devices';
 import { Button } from '@/components/ui/button';
-import { Badge, Chip, Empty, Gauge, KV, Meter, PageHeader, Panel, StatusBadge } from '@/components/ui/display';
+import { Badge, Chip, Empty, KV, Meter, PageHeader, Panel, StatusBadge, Tile, Tiles } from '@/components/ui/display';
+import { PALETTES, usePalette } from '@/lib/theme';
+import { useMe } from '@/api/hooks';
 import { Checkbox, Field, Input, Select } from '@/components/ui/form';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/overlay';
 import { Table, Td, Th, Tr } from '@/components/ui/table';
 
 const TOKENS: [string, string][] = [
-	['--dh-navy-950', 'Navy 950'],
-	['--dh-navy-900', 'Navy 900 · sidebar'],
-	['--dh-navy-800', 'Navy 800'],
-	['--dh-navy-700', 'Navy 700 · active'],
-	['--dh-navy-600', 'Navy 600'],
+	['--dh-rail-bg', 'Rail · sidebar'],
+	['--dh-rail-hover', 'Rail hover'],
+	['--dh-rail-active', 'Rail active'],
+	['--dh-rail-fg', 'Rail text'],
+	['--dh-rail-dim', 'Rail dim'],
 	['--dh-signal', 'Signal · primary, alerts'],
 	['--dh-ok', 'OK · online'],
 	['--dh-off', 'Off · offline'],
 	['--dh-warn', 'Warn · attention'],
 	['--dh-bad', 'Bad · failed'],
 	['--dh-run', 'Run · in progress'],
-	['--dh-bg', 'Background'],
-	['--dh-surface', 'Surface'],
-	['--dh-surface-2', 'Surface 2'],
+	['--dh-bg', 'Page'],
+	['--dh-panel', 'Panel'],
+	['--dh-chip', 'Chip'],
 	['--dh-line', 'Line'],
-	['--dh-line-strong', 'Line strong'],
 	['--dh-fg', 'Text'],
 	['--dh-muted', 'Muted'],
-	['--dh-subtle', 'Subtle'],
+	['--dh-term-bg', 'Script output'],
 ];
 
 function Swatch({ v, label }: { v: string; label: string }) {
@@ -52,6 +53,8 @@ function Swatch({ v, label }: { v: string; label: string }) {
 export function StylePage() {
 	const ok = useCan('admin');
 	const [checked, setChecked] = React.useState(true);
+	const me = useMe();
+	const pal = usePalette(me.data?.username);
 	if (!ok) return <Empty>Only admins can see this page.</Empty>;
 	const sample = [
 		{ name: 'FRONTDESK-01', os: 'Windows 11 Pro 24H2', ip: '10.0.4.21', online: true, attention: [] as never[] },
@@ -78,13 +81,23 @@ export function StylePage() {
 						<div className="font-mono text-3xl tabular">1,234</div>
 					</div>
 				</Panel>
-				<Panel title="Instrument tiles">
-					<div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-						<Gauge label="Online" value={42} tone="ok" sub="of 50" />
-						<Gauge label="Offline" value={8} tone="off" />
-						<Gauge label="Needs attention" value={5} tone="warn" />
-						<Gauge label="Failed runs" value={2} tone="bad" sub="1 running" />
+				<Panel title="Palette">
+					<div className="flex flex-wrap gap-2">
+						{PALETTES.map((p) => (
+							<Button key={p.id} size="sm" variant={pal.palette === p.id ? 'primary' : 'secondary'} onClick={() => pal.setPalette(p.id)} aria-pressed={pal.palette === p.id}>
+								<i className="inline-block size-2.5 rounded-sm border border-line-strong" style={{ background: p.swatch }} />
+								{p.label}
+							</Button>
+						))}
 					</div>
+				</Panel>
+				<Panel title="Instrument tiles" bodyClassName="p-0">
+					<Tiles>
+						<Tile label="Online" value={131} of={148} tone="ok" fill={0.885} />
+						<Tile label="Offline" value={17} tone="off" fill={0.115} />
+						<Tile label="Needs attention" value={9} tone="warn" fill={0.06} />
+						<Tile label="Failed jobs · 24h" value={2} tone="bad" fill={0.014} />
+					</Tiles>
 				</Panel>
 				<Panel title="Buttons and controls">
 					<div className="flex flex-wrap items-center gap-2">
@@ -92,7 +105,8 @@ export function StylePage() {
 							<Play /> Primary
 						</Button>
 						<Button>Secondary</Button>
-						<Button variant="navy">Navy</Button>
+						<Button variant="dark">Dark</Button>
+						<Button variant="act" size="sm">Desktop</Button>
 						<Button variant="ghost">Ghost</Button>
 						<Button variant="danger">
 							<Trash2 /> Danger
@@ -185,9 +199,9 @@ export function StylePage() {
 					</Panel>
 				</div>
 				<Panel title="Output">
-					<pre className="rounded bg-navy-950 px-3 py-2 font-mono text-xs text-[#d7e0ec]">
+					<pre className="rounded bg-term px-3 py-2 font-mono text-xs text-term-fg">
 						host=cwwk{'\n'}uid=0{'\n'}
-						<span className="text-[#ff8f86]">warning: something on stderr</span>
+						<span className="text-term-err">warning: something on stderr</span>
 					</pre>
 				</Panel>
 			</div>

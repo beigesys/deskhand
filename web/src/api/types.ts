@@ -2,6 +2,20 @@
 
 export type Role = 'viewer' | 'operator' | 'admin';
 
+/** Every list endpoint: `?q=&cursor=&limit=&ids=`. */
+export interface Page<T> {
+	items: T[];
+	next_cursor: string | null;
+	total?: number;
+}
+
+export interface Summary {
+	total: number;
+	online: number;
+	attention: number;
+	attention_devices: Device[];
+}
+
 export interface Me {
 	id: number;
 	username: string;
@@ -132,11 +146,7 @@ export interface AuditRow {
 	detail: string;
 }
 
-export interface AuditPage {
-	rows: AuditRow[];
-	next: number | null;
-	actions: string[];
-}
+
 
 export type Shell = 'powershell' | 'cmd' | 'bash' | 'sh';
 
@@ -181,7 +191,7 @@ export interface Job {
 
 export interface JobDetail {
 	job: Job;
-	runs: Run[];
+	counts: Record<string, number>;
 }
 
 export interface NewJob {

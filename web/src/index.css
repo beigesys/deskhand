@@ -23,25 +23,26 @@
 	--color-subtle: var(--dh-subtle);
 	--color-signal: var(--dh-signal);
 	--color-signal-hover: var(--dh-signal-hover);
-	--color-signal-fg: var(--dh-signal-fg);
+	--color-signal-fg: var(--dh-signal-ink);
 	--color-signal-soft: var(--dh-signal-soft);
 	--color-ok: var(--dh-ok);
 	--color-off: var(--dh-off);
 	--color-warn: var(--dh-warn);
 	--color-bad: var(--dh-bad);
 	--color-run: var(--dh-run);
-	--color-navy-950: var(--dh-navy-950);
-	--color-navy-900: var(--dh-navy-900);
-	--color-navy-800: var(--dh-navy-800);
-	--color-navy-700: var(--dh-navy-700);
-	--color-navy-600: var(--dh-navy-600);
-	--color-navy-300: var(--dh-navy-300);
-	--color-side: var(--dh-side-bg);
-	--color-side-fg: var(--dh-side-fg);
-	--color-side-muted: var(--dh-side-muted);
-	--color-side-active: var(--dh-side-active-bg);
-	--color-side-active-fg: var(--dh-side-active-fg);
-	--color-side-line: var(--dh-side-line);
+	--color-chip: var(--dh-chip);
+	--color-rail: var(--dh-rail-bg);
+	--color-rail-hover: var(--dh-rail-hover);
+	--color-rail-active: var(--dh-rail-active);
+	--color-rail-fg: var(--dh-rail-fg);
+	--color-rail-dim: var(--dh-rail-dim);
+	--color-rail-strong: var(--dh-rail-strong);
+	--color-rail-border: var(--dh-rail-border);
+	--color-signal-ink: var(--dh-signal-ink);
+	--color-term: var(--dh-term-bg);
+	--color-term-fg: var(--dh-term-fg);
+	--color-term-err: var(--dh-term-err);
+	--color-scrim: var(--dh-scrim);
 	--color-focus: var(--dh-focus);
 
 	--font-sans: var(--dh-font-sans);
@@ -58,6 +59,7 @@
 	--shadow-*: initial;
 	--shadow-none: none;
 
+	--spacing: 4px;
 	--spacing-row: var(--dh-row);
 	--spacing-control: var(--dh-control);
 }
@@ -95,9 +97,9 @@
 @layer components {
 	/* Uppercase small-caps section label. */
 	.label-caps {
-		font-size: 11px;
-		font-weight: 600;
-		letter-spacing: 0.08em;
+		font-size: 10.5px;
+		font-weight: 500;
+		letter-spacing: 1.2px;
 		text-transform: uppercase;
 		color: var(--dh-muted);
 	}
@@ -109,25 +111,64 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 4px;
-		height: 20px;
-		padding: 0 6px;
-		border: 1px solid var(--dh-line);
-		border-radius: 2px;
-		background: var(--dh-surface-2);
+		padding: 2px 6px;
+		border-radius: 3px;
+		background: var(--dh-chip);
 		font-family: var(--dh-font-mono);
-		font-size: 11px;
-		line-height: 1;
+		font-size: 11.5px;
+		line-height: 1.35;
 		color: var(--dh-fg);
 		white-space: nowrap;
 		max-width: 100%;
 		overflow: hidden;
 		text-overflow: ellipsis;
 	}
-	/* Thin status bar on the left of a device row. */
+	/* Thin status bar on the left of a device row or card. */
 	.status-bar {
 		box-shadow: inset 3px 0 0 var(--bar, var(--dh-off));
 	}
+	/* Square status pip. */
+	.pip {
+		display: inline-block;
+		width: 8px;
+		height: 8px;
+		border-radius: 1px;
+		background: var(--bar, var(--dh-off));
+		flex: none;
+	}
 	.lucide {
 		stroke-width: 1.5;
+	}
+	/* Phones: table rows become stacked cards (cells wrap; headers hidden). */
+	@media (max-width: 767px) {
+		.dh-table thead {
+			display: none;
+		}
+		.dh-table tr {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: 6px 12px;
+			padding: 10px 12px 10px 14px;
+			border-bottom: 1px solid var(--dh-line);
+		}
+		.dh-table td {
+			display: block;
+			height: auto;
+			padding: 0;
+			border: 0;
+			max-width: 100%;
+		}
+	}
+}
+
+@keyframes dh-slide {
+	from {
+		transform: translateX(-100%);
+	}
+}
+@keyframes dh-fade {
+	from {
+		opacity: 0;
 	}
 }

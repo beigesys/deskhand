@@ -1,96 +1,216 @@
 /*
- * Deskhand theme: every color, font, radius and density value the app uses.
- * A rebrand is a change to this file alone.
+ * Deskhand theme: every color, font, radius and density value the app uses. A rebrand
+ * is a change to this file alone.
  *
- * Direction: nautical utility. Deep navy structure, signal orange (a buoy) for primary
- * actions and alerts, 1px borders instead of shadows, small radius, dense rows.
+ * Palettes (data-pal on <html>, picked per user in the user menu): graphite (default),
+ * harbor, field, paper (light sidebar) and navy. Each sets the sidebar ("rail"), the
+ * accent and the page neutrals, for light and dark. Light/dark follows the system unless
+ * data-theme says otherwise.
  */
 
 :root {
-	/* Brand */
-	--dh-navy-950: #08111f;
-	--dh-navy-900: #0d1b31;
-	--dh-navy-800: #132744;
-	--dh-navy-700: #1b355c;
-	--dh-navy-600: #284a7a;
-	--dh-navy-300: #9fb2cc;
-	--dh-signal: #f05a1a;
-	--dh-signal-hover: #d64a0c;
-	--dh-signal-fg: #ffffff;
-	--dh-signal-soft: color-mix(in oklab, var(--dh-signal) 14%, transparent);
+	/* Rail (sidebar): graphite */
+	--dh-rail-bg: #17191c;
+	--dh-rail-hover: #22252a;
+	--dh-rail-active: #2e3238;
+	--dh-rail-fg: #d3d6db;
+	--dh-rail-dim: #868c96;
+	--dh-rail-strong: #ffffff;
+	--dh-rail-border: transparent;
+
+	/* Accent: signal orange */
+	--dh-signal: #f26b1d;
+	--dh-signal-ink: #ffffff;
+
+	/* Page neutrals: graphite light */
+	--dh-bg: #f5f5f4;
+	--dh-panel: #ffffff;
+	--dh-fg: #1c1c1e;
+	--dh-muted: #6b6b70;
+	--dh-line: #e2e2e0;
+	--dh-chip: #efefed;
 
 	/* Status */
-	--dh-ok: #1e9a55;
-	--dh-off: #6f7d8f;
-	--dh-warn: #d18b00;
-	--dh-bad: #d0342c;
-	--dh-run: #2f6fd6;
+	--dh-ok: #1f9d63;
+	--dh-off: #8794a7;
+	--dh-warn: #d99211;
+	--dh-bad: #d23c3c;
+	--dh-run: #3b7dd8;
 
-	/* Surfaces and text (light) */
-	--dh-bg: #f2f4f7;
-	--dh-surface: #ffffff;
-	--dh-surface-2: #eaeef3;
-	--dh-line: #d3dae3;
-	--dh-line-strong: #aeb9c7;
-	--dh-fg: #0d1b31;
-	--dh-muted: #536176;
-	--dh-subtle: #7d8a9c;
-	--dh-focus: var(--dh-signal);
-
-	/* Sidebar: dark navy in both themes */
-	--dh-side-bg: var(--dh-navy-900);
-	--dh-side-fg: #c3cfdf;
-	--dh-side-muted: #7c8da6;
-	--dh-side-active-bg: var(--dh-navy-700);
-	--dh-side-active-fg: #ffffff;
-	--dh-side-line: #1d3253;
+	/* Script output */
+	--dh-term-bg: #141517;
+	--dh-term-fg: #dcdcd8;
+	--dh-term-err: #ff8f86;
 
 	/* Type */
-	--dh-font-sans: 'IBM Plex Sans', system-ui, sans-serif;
-	--dh-font-mono: 'JetBrains Mono', ui-monospace, monospace;
+	--dh-font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+	--dh-font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Consolas, monospace;
 
 	/* Shape and density */
 	--dh-radius: 4px;
-	--dh-row: 32px;
-	--dh-control: 30px;
+	--dh-row: 34px;
+	--dh-control: 32px;
+
+	/* Derived: follow whatever the palette sets above */
+	--dh-surface: var(--dh-panel);
+	--dh-surface-2: var(--dh-chip);
+	--dh-line-strong: color-mix(in oklab, var(--dh-line), var(--dh-fg) 16%);
+	--dh-subtle: color-mix(in oklab, var(--dh-muted), var(--dh-bg) 30%);
+	--dh-signal-hover: color-mix(in oklab, var(--dh-signal), black 12%);
+	--dh-signal-soft: color-mix(in oklab, var(--dh-signal) 12%, transparent);
+	--dh-focus: var(--dh-signal);
+	--dh-scrim: rgb(0 0 0 / 0.5);
 }
 
-@media (prefers-color-scheme: dark) {
-	:root:not([data-theme='light']) {
-		--dh-bg: #0a111d;
-		--dh-surface: #0f1828;
-		--dh-surface-2: #142035;
-		--dh-line: #22314a;
-		--dh-line-strong: #34476a;
-		--dh-fg: #e2e8f1;
-		--dh-muted: #94a3b8;
-		--dh-subtle: #6b7b92;
-		--dh-ok: #34c274;
-		--dh-off: #64748b;
-		--dh-warn: #f0a92a;
-		--dh-bad: #f0534a;
-		--dh-run: #5b93f0;
-		--dh-side-bg: var(--dh-navy-950);
-		--dh-side-line: #16243b;
-		--dh-side-active-bg: var(--dh-navy-800);
+/* Phones: 40px tap targets, taller rows. */
+@media (max-width: 767px) {
+	:root {
+		--dh-control: 40px;
+		--dh-row: 44px;
 	}
 }
 
+/* --- dark (graphite) --- */
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme='light']) {
+		color-scheme: dark;
+		--dh-bg: #121213;
+		--dh-panel: #1b1b1d;
+		--dh-fg: #e8e8e6;
+		--dh-muted: #9a9a9f;
+		--dh-line: #2c2c2f;
+		--dh-chip: #252528;
+		--dh-signal: #ff7a2e;
+		--dh-term-bg: #0c0c0d;
+	}
+}
 :root[data-theme='dark'] {
-	--dh-bg: #0a111d;
-	--dh-surface: #0f1828;
-	--dh-surface-2: #142035;
-	--dh-line: #22314a;
-	--dh-line-strong: #34476a;
-	--dh-fg: #e2e8f1;
-	--dh-muted: #94a3b8;
-	--dh-subtle: #6b7b92;
-	--dh-ok: #34c274;
-	--dh-off: #64748b;
-	--dh-warn: #f0a92a;
-	--dh-bad: #f0534a;
-	--dh-run: #5b93f0;
-	--dh-side-bg: var(--dh-navy-950);
-	--dh-side-line: #16243b;
-	--dh-side-active-bg: var(--dh-navy-800);
+	color-scheme: dark;
+	--dh-bg: #121213;
+	--dh-panel: #1b1b1d;
+	--dh-fg: #e8e8e6;
+	--dh-muted: #9a9a9f;
+	--dh-line: #2c2c2f;
+	--dh-chip: #252528;
+	--dh-signal: #ff7a2e;
+	--dh-term-bg: #0c0c0d;
+}
+
+/* --- harbor: teal rail, brass accent --- */
+:root[data-pal='harbor'] {
+	--dh-rail-bg: #0f2a2a;
+	--dh-rail-hover: #163837;
+	--dh-rail-active: #1f4746;
+	--dh-rail-fg: #cfe0dc;
+	--dh-rail-dim: #7fa09a;
+	--dh-signal: #d9a441;
+	--dh-signal-ink: #1a1405;
+	--dh-bg: #f3f6f5;
+	--dh-panel: #ffffff;
+	--dh-fg: #152221;
+	--dh-muted: #5f716e;
+	--dh-line: #dce5e3;
+	--dh-chip: #e9f0ee;
+	--dh-term-bg: #0c1a1a;
+}
+@media (prefers-color-scheme: dark) {
+	:root[data-pal='harbor']:not([data-theme='light']) {
+		--dh-bg: #0e1514;
+		--dh-panel: #15201f;
+		--dh-fg: #e2ecea;
+		--dh-muted: #8fa5a1;
+		--dh-line: #243432;
+		--dh-chip: #1d2b29;
+		--dh-signal: #d9a441;
+	}
+}
+:root[data-pal='harbor'][data-theme='dark'] {
+	--dh-bg: #0e1514;
+	--dh-panel: #15201f;
+	--dh-fg: #e2ecea;
+	--dh-muted: #8fa5a1;
+	--dh-line: #243432;
+	--dh-chip: #1d2b29;
+	--dh-signal: #d9a441;
+}
+
+/* --- field: olive rail, orange accent --- */
+:root[data-pal='field'] {
+	--dh-rail-bg: #262a1e;
+	--dh-rail-hover: #31362a;
+	--dh-rail-active: #3d4334;
+	--dh-rail-fg: #dcdccb;
+	--dh-rail-dim: #9a9c84;
+	--dh-bg: #f5f5f0;
+	--dh-panel: #ffffff;
+	--dh-fg: #1f2119;
+	--dh-muted: #6c6e5f;
+	--dh-line: #e2e2d8;
+	--dh-chip: #eeeee6;
+	--dh-term-bg: #16170f;
+}
+@media (prefers-color-scheme: dark) {
+	:root[data-pal='field']:not([data-theme='light']) {
+		--dh-bg: #131410;
+		--dh-panel: #1c1d17;
+		--dh-fg: #e8e8de;
+		--dh-muted: #a0a290;
+		--dh-line: #2e3026;
+		--dh-chip: #26271f;
+	}
+}
+:root[data-pal='field'][data-theme='dark'] {
+	--dh-bg: #131410;
+	--dh-panel: #1c1d17;
+	--dh-fg: #e8e8de;
+	--dh-muted: #a0a290;
+	--dh-line: #2e3026;
+	--dh-chip: #26271f;
+}
+
+/* --- paper: light rail (the page's own panel colors), graphite neutrals --- */
+:root[data-pal='paper'] {
+	--dh-rail-bg: var(--dh-panel);
+	--dh-rail-hover: var(--dh-chip);
+	--dh-rail-active: var(--dh-chip);
+	--dh-rail-fg: var(--dh-fg);
+	--dh-rail-dim: var(--dh-muted);
+	--dh-rail-strong: var(--dh-fg);
+	--dh-rail-border: var(--dh-line);
+}
+
+/* --- navy: the original --- */
+:root[data-pal='navy'] {
+	--dh-rail-bg: #0b1626;
+	--dh-rail-hover: #12223a;
+	--dh-rail-active: #1b3150;
+	--dh-rail-fg: #c9d4e3;
+	--dh-rail-dim: #7d8ea8;
+	--dh-bg: #f4f6f9;
+	--dh-panel: #ffffff;
+	--dh-fg: #142033;
+	--dh-muted: #5d6b80;
+	--dh-line: #d9e0ea;
+	--dh-chip: #eaeff5;
+	--dh-term-bg: #0b1626;
+}
+@media (prefers-color-scheme: dark) {
+	:root[data-pal='navy']:not([data-theme='light']) {
+		--dh-bg: #0e1828;
+		--dh-panel: #142236;
+		--dh-fg: #e3e9f2;
+		--dh-muted: #93a2b8;
+		--dh-line: #22344f;
+		--dh-chip: #1c2d46;
+		--dh-term-bg: #08111f;
+	}
+}
+:root[data-pal='navy'][data-theme='dark'] {
+	--dh-bg: #0e1828;
+	--dh-panel: #142236;
+	--dh-fg: #e3e9f2;
+	--dh-muted: #93a2b8;
+	--dh-line: #22344f;
+	--dh-chip: #1c2d46;
+	--dh-term-bg: #08111f;
 }

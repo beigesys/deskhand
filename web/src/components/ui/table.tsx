@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 export function Table({ children, className }: { children: React.ReactNode; className?: string }) {
 	return (
 		<div className={cn('overflow-x-auto', className)}>
-			<table className="w-full border-collapse text-[13px]">{children}</table>
+			<table className="dh-table w-full border-collapse text-[13px]">{children}</table>
 		</div>
 	);
 }
@@ -14,7 +14,7 @@ export function Th({ children, className, ...props }: React.ThHTMLAttributes<HTM
 	return (
 		<th
 			className={cn(
-				'sticky top-0 z-[1] h-8 border-b border-line bg-surface-2 px-3 text-left align-middle text-[11px] font-semibold uppercase tracking-[0.08em] text-muted whitespace-nowrap',
+				'h-8 border-b border-line bg-surface px-3 text-left align-middle text-[10.5px] font-medium uppercase tracking-[1.2px] text-muted whitespace-nowrap',
 				className,
 			)}
 			{...props}
@@ -34,7 +34,7 @@ export function Td({ children, className, ...props }: React.TdHTMLAttributes<HTM
 
 export function Tr({ children, className, ...props }: React.HTMLAttributes<HTMLTableRowElement>) {
 	return (
-		<tr className={cn('hover:bg-surface-2/60', className)} {...props}>
+		<tr className={cn('[&:last-child>td]:border-b-0 hover:[&>td]:bg-signal/5', className)} {...props}>
 			{children}
 		</tr>
 	);

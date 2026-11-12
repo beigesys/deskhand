@@ -22,7 +22,7 @@ export function DialogContent({
 }) {
 	return (
 		<D.Portal>
-			<D.Overlay className="fixed inset-0 z-40 bg-navy-950/60" />
+			<D.Overlay className="fixed inset-0 z-40 bg-scrim" />
 			<D.Content
 				className={cn(
 					'fixed left-1/2 top-[10vh] z-50 grid max-h-[80vh] w-[calc(100vw-32px)] max-w-lg -translate-x-1/2 gap-0 overflow-hidden rounded border border-line-strong bg-surface',
@@ -87,7 +87,7 @@ export function MenuItem({
 			onSelect={onSelect}
 			disabled={disabled}
 			className={cn(
-				'flex h-7 cursor-pointer items-center gap-2 px-3 outline-none data-[highlighted]:bg-surface-2 data-[disabled]:opacity-50 [&_svg]:size-4',
+				'flex h-7 max-md:h-10 cursor-pointer items-center gap-2 px-3 outline-none data-[highlighted]:bg-surface-2 data-[disabled]:opacity-50 [&_svg]:size-4',
 				danger && 'text-bad',
 			)}
 		>
@@ -114,7 +114,7 @@ export function TabsTrigger({ value, children }: { value: string; children: Reac
 	return (
 		<T.Trigger
 			value={value}
-			className="-mb-px h-9 cursor-pointer whitespace-nowrap border-b-2 border-transparent px-3 text-[13px] font-medium text-muted hover:text-fg data-[state=active]:border-signal data-[state=active]:text-fg"
+			className="-mb-px h-9 max-md:h-11 cursor-pointer focus-visible:outline-offset-[-2px] whitespace-nowrap border-b-2 border-transparent px-3 text-[13px] font-medium text-muted hover:text-fg data-[state=active]:border-signal data-[state=active]:text-fg"
 		>
 			{children}
 		</T.Trigger>
@@ -132,11 +132,46 @@ export function Tip({ label, children }: { label: React.ReactNode; children: Rea
 			<TT.Portal>
 				<TT.Content
 					sideOffset={4}
-					className="z-50 rounded-sm bg-navy-900 px-2 py-1 text-xs text-white"
+					className="z-50 rounded-sm bg-rail px-2 py-1 text-xs text-rail-strong"
 				>
 					{label}
 				</TT.Content>
 			</TT.Portal>
 		</TT.Root>
+	);
+}
+
+// --- sheet: a dialog that slides in from the left (the phone navigation drawer) ---
+
+export function Sheet({
+	open,
+	onOpenChange,
+	title,
+	children,
+}: {
+	open: boolean;
+	onOpenChange: (v: boolean) => void;
+	title: string;
+	children: React.ReactNode;
+}) {
+	return (
+		<D.Root open={open} onOpenChange={onOpenChange}>
+			<D.Portal>
+				<D.Overlay className="fixed inset-0 z-40 bg-scrim data-[state=open]:animate-[dh-fade_.15s_ease-out] motion-reduce:animate-none" />
+				<D.Content
+					className="fixed inset-y-0 left-0 z-50 flex w-[min(300px,85vw)] flex-col outline-none data-[state=open]:animate-[dh-slide_.18s_ease-out] motion-reduce:animate-none"
+					aria-describedby={undefined}
+				>
+					<D.Title className="sr-only">{title}</D.Title>
+					{children}
+					<D.Close
+						className="absolute right-2 top-2 grid size-10 place-items-center rounded text-rail-fg hover:bg-rail-hover"
+						aria-label="Close menu"
+					>
+						<X className="size-5" />
+					</D.Close>
+				</D.Content>
+			</D.Portal>
+		</D.Root>
 	);
 }

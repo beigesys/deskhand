@@ -17,14 +17,15 @@ import {
 	FolderInput,
 } from 'lucide-react';
 import { api } from '@/api/client';
-import { keys, useAction, useCan, useDevice, useGroups } from '@/api/hooks';
-import type { Device, DeviceDetail, Inventory, JobKind } from '@/api/types';
+import { keys, useAction, useCan, useDevice } from '@/api/hooks';
+import type { Device, DeviceDetail, Group, Inventory, JobKind } from '@/api/types';
+import { AsyncCombobox, groupOption, NO_GROUP } from '@/components/ui/async-combobox';
 import { AttentionBadges, barColor } from '@/components/devices';
 import { confirmText, RunDialog } from '@/components/jobs';
 import { Button } from '@/components/ui/button';
 import { Confirm } from '@/components/ui/confirm';
 import { Badge, Chip, Empty, KV, Meter, Panel, StatusBadge } from '@/components/ui/display';
-import { Field, Input, Select } from '@/components/ui/form';
+import { Field, Input } from '@/components/ui/form';
 import {
 	Dialog,
 	DialogContent,
@@ -283,13 +284,13 @@ export function DevicePage() {
 	const { tab } = useSearch({ from: '/app/devices/$id' });
 	const navigate = useNavigate();
 	const q = useDevice(id);
-	const groups = useGroups();
 	const canRun = useCan('operator');
 	const isAdmin = useCan('admin');
 	const [run, setRun] = React.useState(false);
 	const [power, setPower] = React.useState<Exclude<JobKind, 'script'> | null>(null);
 	const [renaming, setRenaming] = React.useState(false);
 	const [moving, setMoving] = React.useState(false);
+	const [moveTo, setMoveTo] = React.useState<string | null>(null);
 	const [deleting, setDeleting] = React.useState(false);
 
 	const refresh = useAction(() => api.post(`/devices/${id}/refresh`), { success: 'Inventory requested' });
@@ -346,12 +347,12 @@ export function DevicePage() {
 					<div className="flex flex-wrap gap-2">
 						{canRun && (
 							<>
-								<Button variant="navy" asChild disabled={!d.online}>
+								<Button variant="dark" asChild disabled={!d.online}>
 									<a href={`/d/${d.id}/`} target="_blank" rel="noreferrer" aria-disabled={!d.online}>
 										<Monitor /> Desktop
 									</a>
 								</Button>
-								<Button variant="navy" asChild>
+								<Button variant="dark" asChild>
 									<a href={`/d/${d.id}/shell`} target="_blank" rel="noreferrer">
 										<SquareTerminal /> Shell
 									</a>
@@ -505,18 +506,19 @@ export function DevicePage() {
 					<form
 						onSubmit={(e) => {
 							e.preventDefault();
-							const v = String(new FormData(e.currentTarget).get('group'));
-							move.mutate(v ? Number(v) : null);
+							move.mutate(moveTo && moveTo !== 'none' ? Number(moveTo) : null);
 						}}
 					>
-						<Select name="group" defaultValue={d.group_id ?? ''} aria-label="Group">
-							<option value="">No group</option>
-							{(groups.data ?? []).map((g) => (
-								<option key={g.id} value={g.id}>
-									{g.name}
-								</option>
-							))}
-						</Select>
+						<AsyncCombobox<Group>
+							endpoint="/groups"
+							toOption={groupOption}
+							extra={[NO_GROUP]}
+							value={moveTo ?? (d.group_id != null ? String(d.group_id) : 'none')}
+							onChange={setMoveTo}
+							placeholder="Pick a group…"
+							searchPlaceholder="Search groups…"
+							aria-label="Group"
+						/>
 						<DialogFooter>
 							<Button variant="ghost" onClick={() => setMoving(false)}>
 								Cancel

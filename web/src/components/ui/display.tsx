@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { createPortal } from 'react-dom';
 import { cn } from '@/lib/utils';
 
 /** A bordered panel with an optional caps header and actions. */
@@ -28,42 +29,63 @@ export function Panel({
 	);
 }
 
-/** Instrument-panel tile: a large tabular number with a small caps label. */
-export function Gauge({
+/** Instrument panel: one bordered strip of tiles, 4 across (2×2 on phones). */
+export function Tiles({ children, label }: { children: React.ReactNode; label?: string }) {
+	return (
+		<section
+			aria-label={label}
+			className="grid grid-cols-2 overflow-hidden rounded border border-line bg-surface lg:grid-cols-4 [&>*]:border-line [&>*:nth-child(even)]:border-l [&>*:nth-child(n+3)]:border-t lg:[&>*:nth-child(n+2)]:border-l lg:[&>*:nth-child(n+3)]:border-t-0"
+		>
+			{children}
+		</section>
+	);
+}
+
+const toneVar = { ok: 'var(--dh-ok)', off: 'var(--dh-off)', warn: 'var(--dh-warn)', bad: 'var(--dh-bad)', signal: 'var(--dh-signal)' };
+
+/** One instrument tile: pip and caps label, a large tabular number, a thin gauge. */
+export function Tile({
 	label,
 	value,
-	tone,
+	of,
+	tone = 'off',
+	fill,
 	sub,
 	onClick,
 }: {
 	label: string;
 	value: React.ReactNode;
-	tone?: 'ok' | 'off' | 'warn' | 'bad' | 'signal';
+	of?: React.ReactNode;
+	tone?: keyof typeof toneVar;
+	/** 0..1: how full the gauge under the number is. */
+	fill?: number;
 	sub?: React.ReactNode;
 	onClick?: () => void;
 }) {
-	const color = {
-		ok: 'text-ok',
-		off: 'text-off',
-		warn: 'text-warn',
-		bad: 'text-bad',
-		signal: 'text-signal',
-	}[tone ?? 'off'];
 	const Comp = onClick ? 'button' : 'div';
 	return (
 		<Comp
 			onClick={onClick}
+			style={{ ['--bar' as string]: toneVar[tone] }}
 			className={cn(
-				'relative flex flex-col items-start gap-1 rounded border border-line bg-surface px-4 py-3 text-left',
-				onClick && 'cursor-pointer hover:border-line-strong',
+				'flex min-w-0 flex-col gap-1.5 px-4 py-3.5 text-left',
+				onClick && 'cursor-pointer hover:bg-signal/5',
 			)}
 		>
-			<span className="label-caps">{label}</span>
-			<span className={cn('font-mono text-3xl font-medium leading-none tabular', tone ? color : 'text-fg')}>
-				{value}
+			<span className="label-caps flex items-center gap-1.5">
+				<span className="pip" />
+				{label}
 			</span>
+			<span className="font-mono text-[30px] font-medium leading-none tabular">
+				{value}
+				{of != null && <small className="text-sm font-normal text-muted"> / {of}</small>}
+			</span>
+			{fill != null && (
+				<span className="block h-1 overflow-hidden rounded-sm bg-chip">
+					<span className="block h-full" style={{ width: `${Math.min(100, Math.max(0, fill * 100))}%`, background: 'var(--bar)' }} />
+				</span>
+			)}
 			{sub && <span className="text-xs text-muted">{sub}</span>}
-			<span className={cn('absolute right-3 top-3 h-1.5 w-1.5 rounded-full', tone ? `bg-current ${color}` : 'bg-line')} />
 		</Comp>
 	);
 }
@@ -141,30 +163,55 @@ export function Empty({ children }: { children: React.ReactNode }) {
 
 export function Meter({ used, total }: { used: number; total: number }) {
 	const pct = total > 0 ? Math.min(100, (used / total) * 100) : 0;
-	const tone = pct > 90 ? 'bg-bad' : pct > 75 ? 'bg-warn' : 'bg-navy-600';
+	const tone = pct > 90 ? 'bg-bad' : pct > 75 ? 'bg-warn' : 'bg-muted';
 	return (
-		<div className="h-1.5 w-full min-w-16 overflow-hidden rounded-sm bg-surface-2" role="meter" aria-valuenow={Math.round(pct)}>
+		<div className="h-1 w-full min-w-16 overflow-hidden rounded-sm bg-chip" role="meter" aria-valuenow={Math.round(pct)}>
 			<div className={cn('h-full', tone)} style={{ width: `${pct}%` }} />
 		</div>
 	);
 }
 
+/** Where a page puts its title and primary action in the phone top bar (AppShell). */
+export const TopbarSlot = React.createContext<HTMLElement | null>(null);
+
+/**
+ * Page title row. On phones the title and `primary` move into the top bar; the other
+ * actions stay here.
+ */
 export function PageHeader({
 	title,
 	sub,
 	actions,
+	primary,
 }: {
 	title: React.ReactNode;
 	sub?: React.ReactNode;
 	actions?: React.ReactNode;
+	primary?: React.ReactNode;
 }) {
+	const slot = React.useContext(TopbarSlot);
 	return (
-		<div className="flex flex-wrap items-end justify-between gap-3 pb-4">
-			<div className="min-w-0">
-				<h1 className="truncate text-xl font-semibold tracking-tight">{title}</h1>
-				{sub && <div className="mt-0.5 text-[13px] text-muted">{sub}</div>}
+		<>
+			{slot &&
+				createPortal(
+					<div className="flex min-w-0 flex-1 items-center gap-2 md:hidden">
+						<span className="min-w-0 flex-1 truncate text-[15px] font-semibold">{title}</span>
+						{primary}
+					</div>,
+					slot,
+				)}
+			<div className="flex flex-wrap items-end justify-between gap-3 pb-4">
+				<div className="min-w-0">
+					<h1 className="truncate text-xl font-semibold tracking-tight max-md:sr-only">{title}</h1>
+					{sub && <div className="mt-0.5 text-[13px] text-muted">{sub}</div>}
+				</div>
+				{(actions || primary) && (
+					<div className="flex flex-wrap items-center gap-2">
+						{actions}
+						{primary && <span className="max-md:hidden">{primary}</span>}
+					</div>
+				)}
 			</div>
-			{actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
-		</div>
+		</>
 	);
 }
