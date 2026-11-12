@@ -1,0 +1,133 @@
+@import '@fontsource/ibm-plex-sans/400.css';
+@import '@fontsource/ibm-plex-sans/500.css';
+@import '@fontsource/ibm-plex-sans/600.css';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+@import 'tailwindcss';
+@import './theme.css';
+
+/* Tailwind reads its palette, fonts and radii from theme.css; nothing else defines color. */
+@theme inline {
+	--color-*: initial;
+	--color-transparent: transparent;
+	--color-current: currentColor;
+	--color-white: #fff;
+	--color-black: #000;
+	--color-bg: var(--dh-bg);
+	--color-surface: var(--dh-surface);
+	--color-surface-2: var(--dh-surface-2);
+	--color-line: var(--dh-line);
+	--color-line-strong: var(--dh-line-strong);
+	--color-fg: var(--dh-fg);
+	--color-muted: var(--dh-muted);
+	--color-subtle: var(--dh-subtle);
+	--color-signal: var(--dh-signal);
+	--color-signal-hover: var(--dh-signal-hover);
+	--color-signal-fg: var(--dh-signal-fg);
+	--color-signal-soft: var(--dh-signal-soft);
+	--color-ok: var(--dh-ok);
+	--color-off: var(--dh-off);
+	--color-warn: var(--dh-warn);
+	--color-bad: var(--dh-bad);
+	--color-run: var(--dh-run);
+	--color-navy-950: var(--dh-navy-950);
+	--color-navy-900: var(--dh-navy-900);
+	--color-navy-800: var(--dh-navy-800);
+	--color-navy-700: var(--dh-navy-700);
+	--color-navy-600: var(--dh-navy-600);
+	--color-navy-300: var(--dh-navy-300);
+	--color-side: var(--dh-side-bg);
+	--color-side-fg: var(--dh-side-fg);
+	--color-side-muted: var(--dh-side-muted);
+	--color-side-active: var(--dh-side-active-bg);
+	--color-side-active-fg: var(--dh-side-active-fg);
+	--color-side-line: var(--dh-side-line);
+	--color-focus: var(--dh-focus);
+
+	--font-sans: var(--dh-font-sans);
+	--font-mono: var(--dh-font-mono);
+
+	--radius-*: initial;
+	--radius-none: 0;
+	--radius-sm: 2px;
+	--radius: var(--dh-radius);
+	--radius-md: var(--dh-radius);
+	--radius-lg: var(--dh-radius);
+	--radius-full: 9999px;
+
+	--shadow-*: initial;
+	--shadow-none: none;
+
+	--spacing-row: var(--dh-row);
+	--spacing-control: var(--dh-control);
+}
+
+@layer base {
+	html {
+		background: var(--dh-bg);
+		color: var(--dh-fg);
+		font-family: var(--dh-font-sans);
+		font-size: 14px;
+		-webkit-font-smoothing: antialiased;
+	}
+	body {
+		margin: 0;
+		background: var(--dh-bg);
+		min-height: 100dvh;
+	}
+	* {
+		border-color: var(--dh-line);
+	}
+	:focus-visible {
+		outline: 2px solid var(--dh-focus);
+		outline-offset: 1px;
+	}
+	::selection {
+		background: var(--dh-signal-soft);
+	}
+	code,
+	kbd,
+	pre {
+		font-family: var(--dh-font-mono);
+	}
+}
+
+@layer components {
+	/* Uppercase small-caps section label. */
+	.label-caps {
+		font-size: 11px;
+		font-weight: 600;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--dh-muted);
+	}
+	.tabular {
+		font-variant-numeric: tabular-nums;
+	}
+	/* Monospace chip for OS, IP, serial, versions. */
+	.chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		height: 20px;
+		padding: 0 6px;
+		border: 1px solid var(--dh-line);
+		border-radius: 2px;
+		background: var(--dh-surface-2);
+		font-family: var(--dh-font-mono);
+		font-size: 11px;
+		line-height: 1;
+		color: var(--dh-fg);
+		white-space: nowrap;
+		max-width: 100%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	/* Thin status bar on the left of a device row. */
+	.status-bar {
+		box-shadow: inset 3px 0 0 var(--bar, var(--dh-off));
+	}
+	.lucide {
+		stroke-width: 1.5;
+	}
+}

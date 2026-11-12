@@ -1,0 +1,96 @@
+/*
+ * Deskhand theme: every color, font, radius and density value the app uses.
+ * A rebrand is a change to this file alone.
+ *
+ * Direction: nautical utility. Deep navy structure, signal orange (a buoy) for primary
+ * actions and alerts, 1px borders instead of shadows, small radius, dense rows.
+ */
+
+:root {
+	/* Brand */
+	--dh-navy-950: #08111f;
+	--dh-navy-900: #0d1b31;
+	--dh-navy-800: #132744;
+	--dh-navy-700: #1b355c;
+	--dh-navy-600: #284a7a;
+	--dh-navy-300: #9fb2cc;
+	--dh-signal: #f05a1a;
+	--dh-signal-hover: #d64a0c;
+	--dh-signal-fg: #ffffff;
+	--dh-signal-soft: color-mix(in oklab, var(--dh-signal) 14%, transparent);
+
+	/* Status */
+	--dh-ok: #1e9a55;
+	--dh-off: #6f7d8f;
+	--dh-warn: #d18b00;
+	--dh-bad: #d0342c;
+	--dh-run: #2f6fd6;
+
+	/* Surfaces and text (light) */
+	--dh-bg: #f2f4f7;
+	--dh-surface: #ffffff;
+	--dh-surface-2: #eaeef3;
+	--dh-line: #d3dae3;
+	--dh-line-strong: #aeb9c7;
+	--dh-fg: #0d1b31;
+	--dh-muted: #536176;
+	--dh-subtle: #7d8a9c;
+	--dh-focus: var(--dh-signal);
+
+	/* Sidebar: dark navy in both themes */
+	--dh-side-bg: var(--dh-navy-900);
+	--dh-side-fg: #c3cfdf;
+	--dh-side-muted: #7c8da6;
+	--dh-side-active-bg: var(--dh-navy-700);
+	--dh-side-active-fg: #ffffff;
+	--dh-side-line: #1d3253;
+
+	/* Type */
+	--dh-font-sans: 'IBM Plex Sans', system-ui, sans-serif;
+	--dh-font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+	/* Shape and density */
+	--dh-radius: 4px;
+	--dh-row: 32px;
+	--dh-control: 30px;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme='light']) {
+		--dh-bg: #0a111d;
+		--dh-surface: #0f1828;
+		--dh-surface-2: #142035;
+		--dh-line: #22314a;
+		--dh-line-strong: #34476a;
+		--dh-fg: #e2e8f1;
+		--dh-muted: #94a3b8;
+		--dh-subtle: #6b7b92;
+		--dh-ok: #34c274;
+		--dh-off: #64748b;
+		--dh-warn: #f0a92a;
+		--dh-bad: #f0534a;
+		--dh-run: #5b93f0;
+		--dh-side-bg: var(--dh-navy-950);
+		--dh-side-line: #16243b;
+		--dh-side-active-bg: var(--dh-navy-800);
+	}
+}
+
+:root[data-theme='dark'] {
+	--dh-bg: #0a111d;
+	--dh-surface: #0f1828;
+	--dh-surface-2: #142035;
+	--dh-line: #22314a;
+	--dh-line-strong: #34476a;
+	--dh-fg: #e2e8f1;
+	--dh-muted: #94a3b8;
+	--dh-subtle: #6b7b92;
+	--dh-ok: #34c274;
+	--dh-off: #64748b;
+	--dh-warn: #f0a92a;
+	--dh-bad: #f0534a;
+	--dh-run: #5b93f0;
+	--dh-side-bg: var(--dh-navy-950);
+	--dh-side-line: #16243b;
+	--dh-side-active-bg: var(--dh-navy-800);
+}
