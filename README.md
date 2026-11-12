@@ -28,20 +28,39 @@ cargo build --release
 Server:
 
 ```sh
-ITHUB_ADMIN_PASSWORD=... ITHUB_AGENT_KEY=... ./target/release/ithub-server
-# listens on 0.0.0.0:8080; set ITHUB_ADDR to change it
+./target/release/ithub-server
+# listens on 0.0.0.0:8080 and keeps its data in ./ithub.db
 ```
 
-Agent, on each machine (Linux needs an X11 display; Wayland isn't supported yet):
+| Variable | Default | Purpose |
+|---|---|---|
+| `ITHUB_ADDR` | `0.0.0.0:8080` | Listen address |
+| `ITHUB_DB` | `./ithub.db` | SQLite database file |
+| `ITHUB_ADMIN_PASSWORD` | unset | With no users yet, creates `admin` with this password |
+| `ITHUB_TRUST_PROXY` | unset | `1` to trust `X-Forwarded-Proto`/`-For` from your TLS proxy (sets `Secure` cookies) |
+
+Without `ITHUB_ADMIN_PASSWORD`, the first start prints a one-time link,
+`http://SERVER:8080/setup?token=...`, where you create the first admin.
+
+Enroll a machine:
+
+1. In the dashboard, open **Enroll**, pick a group, and create a token.
+2. Run the install command it shows on the machine. By hand, that's:
 
 ```sh
-DISPLAY=:0 ./target/release/ithub-agent --server ws://SERVER:8080 --key AGENT_KEY
-# or ITHUB_SERVER / ITHUB_AGENT_KEY; voxl flags go after --, e.g. -- --framerate=30
+ithub-agent enroll --server https://SERVER --token TOKEN   # saves agent.json in the config dir
+DISPLAY=:0 ithub-agent                                       # connects; voxl flags go after --
 ```
 
-Open `http://SERVER:8080`, sign in, and pick a device. Browsers only allow WebCodecs
-on HTTPS or localhost, so put the server behind a TLS proxy (Caddy, nginx) and point
-agents at `wss://`.
+Linux needs an X11 display; Wayland isn't supported yet. `--config FILE` (or
+`ITHUB_CONFIG`) picks another identity file, so several agents can run on one machine
+while developing.
+
+Roles: **viewer** sees the device list, **operator** can also open desktops and shells,
+**admin** manages devices, groups, enrollment tokens, users and reads the audit log.
+
+Browsers only allow WebCodecs on HTTPS or localhost, so put the server behind a TLS
+proxy (Caddy, nginx), set `ITHUB_TRUST_PROXY=1`, and enroll agents with `https://`.
 
 ## License
 

@@ -2,21 +2,24 @@
 //! voxl over a fresh agent stream. voxl's page uses relative URLs, so it works under the
 //! `/d/{id}/` prefix unchanged.
 
-use crate::{open_stream, signed_in, Shared};
+use crate::auth::require;
+use crate::db::Role;
+use crate::{now, open_stream, Shared};
 use ithub_proto::StreamKind;
 use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{Request, State};
 use axum::http::{header, HeaderValue, StatusCode};
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
 use hyper_util::rt::TokioIo;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 
 pub async fn device(State(app): State<Shared>, mut req: Request) -> Response {
-    if !signed_in(&app, req.headers()) {
-        return Redirect::to("/login").into_response();
-    }
+    let user = match require(&app, req.headers(), Role::Operator) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     // /d/{id}/{rest}: the id and what follows it.
     let path = req.uri().path().to_owned();
     let Some((id, rest)) = path
@@ -29,6 +32,10 @@ pub async fn device(State(app): State<Shared>, mut req: Request) -> Response {
     let Some(token) = app.agents.lock().unwrap().get(&id).map(|a| a.voxl_token.clone()) else {
         return (StatusCode::NOT_FOUND, "device offline").into_response();
     };
+    // The page's video socket marks a desktop session; its other requests are assets.
+    if rest == "ws" {
+        app.db.audit(now(), Some(user.id), Some(&id), "desktop.open", "");
+    }
     let Some(ws) = open_stream(&app, &id, StreamKind::Desktop).await else {
         return (StatusCode::BAD_GATEWAY, "device didn't open a stream").into_response();
     };

@@ -1,14 +1,16 @@
 //! ithub agent: runs voxl on a loopback port and dials out to the ithub server, which
 //! reaches that voxl through streams the agent opens on request.
 //!
-//! Settings: `--server` / `ITHUB_SERVER` (the server's base URL, ws:// or wss://, http(s)://
-//! also accepted) and `--key` / `ITHUB_AGENT_KEY` (the server's agent key). Arguments after
-//! `--` go to voxl as they are.
+//! - `ithub-agent enroll --server URL --token T`: trades a dashboard enrollment token for
+//!   this device's id and secret, saved to `agent.json` in the config dir.
+//! - `ithub-agent [run]`: connects with that identity. `--server` overrides the saved
+//!   server URL; `--config` / `ITHUB_CONFIG` picks another file (several agents on one
+//!   machine while developing). Arguments after `--` go to voxl as they are.
 
 mod shell;
 
 use futures_util::{SinkExt, StreamExt};
-use ithub_proto::{AgentMsg, ServerMsg, StreamKind};
+use ithub_proto::{AgentMsg, EnrollRequest, EnrollResponse, ServerMsg, StreamKind};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -23,28 +25,6 @@ fn random_hex(bytes: usize) -> String {
     hex::encode(b)
 }
 
-/// The id this machine keeps across restarts, in the config dir.
-fn agent_id() -> String {
-    let path = dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("ithub")
-        .join("agent-id");
-    if let Ok(id) = std::fs::read_to_string(&path) {
-        let id = id.trim();
-        if !id.is_empty() {
-            return id.to_owned();
-        }
-    }
-    let id = random_hex(16);
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    if let Err(e) = std::fs::write(&path, &id) {
-        log::warn!("couldn't save the agent id to {}: {e}", path.display());
-    }
-    id
-}
-
 fn hostname() -> String {
     std::env::var("HOSTNAME")
         .ok()
@@ -55,55 +35,153 @@ fn hostname() -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
+/// What enrolling saves: where the server is and who this device is to it.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Identity {
+    server: String,
+    device_id: String,
+    secret: String,
+}
+
+fn default_config() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("ithub")
+        .join("agent.json")
+}
+
+fn load(path: &PathBuf) -> Result<Identity, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Writes the identity readable by its owner only: the secret is the device's password.
+fn save(path: &PathBuf, id: &Identity) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    let text = serde_json::to_string_pretty(id).unwrap();
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    let mut f = opts.open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = f.set_permissions(std::fs::Permissions::from_mode(0o600));
+    }
+    std::io::Write::write_all(&mut f, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// http(s) for the enroll call; the sockets use ws(s).
+fn http_base(server: &str) -> String {
+    server
+        .trim_end_matches('/')
+        .replacen("wss://", "https://", 1)
+        .replacen("ws://", "http://", 1)
+}
+
+fn ws_base(server: &str) -> String {
+    server
+        .trim_end_matches('/')
+        .replacen("https://", "wss://", 1)
+        .replacen("http://", "ws://", 1)
+}
+
+fn enroll(server: &str, token: &str, path: &PathBuf) -> Result<(), String> {
+    let server = http_base(server);
+    let req = EnrollRequest {
+        token: token.trim().to_owned(),
+        hostname: hostname(),
+        os: std::env::consts::OS.into(),
+    };
+    let mut resp = ureq::post(&format!("{server}/api/enroll"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .send_json(&req)
+        .map_err(|e| format!("{server}: {e}"))?;
+    if !resp.status().is_success() {
+        let body = resp.body_mut().read_to_string().unwrap_or_default();
+        return Err(format!("server said {}: {body}", resp.status()));
+    }
+    let r: EnrollResponse = resp.body_mut().read_json().map_err(|e| e.to_string())?;
+    save(path, &Identity { server, device_id: r.device_id.clone(), secret: r.secret })?;
+    println!("enrolled as {}; identity saved to {}", r.device_id, path.display());
+    Ok(())
+}
+
 struct Config {
     server: String,
-    key: String,
-    id: String,
+    device_id: String,
+    secret: String,
     voxl_port: u16,
     voxl_token: String,
+}
+
+const USAGE: &str = "usage:
+  ithub-agent enroll --server URL --token TOKEN [--config FILE]
+  ithub-agent [run] [--server URL] [--config FILE] [-- voxl flags]";
+
+fn fail(msg: &str) -> ! {
+    eprintln!("{msg}");
+    std::process::exit(2);
 }
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let mut server = std::env::var("ITHUB_SERVER").ok();
-    let mut key = std::env::var("ITHUB_AGENT_KEY").ok();
+    let mut config = std::env::var("ITHUB_CONFIG").ok().map(PathBuf::from);
+    let mut token = None;
     let mut voxl_args = Vec::new();
-    let mut args = std::env::args().skip(1);
+    let mut args = std::env::args().skip(1).peekable();
+    let command = match args.peek().map(String::as_str) {
+        Some("enroll") | Some("run") => args.next().unwrap(),
+        _ => "run".into(),
+    };
     while let Some(a) = args.next() {
-        if a == "--" {
-            voxl_args.extend(args.by_ref());
-        } else if let Some(v) = a.strip_prefix("--server=") {
-            server = Some(v.into());
-        } else if a == "--server" {
-            server = args.next();
-        } else if let Some(v) = a.strip_prefix("--key=") {
-            key = Some(v.into());
-        } else if a == "--key" {
-            key = args.next();
-        } else {
-            eprintln!("unknown argument {a:?}; voxl's flags go after --");
-            std::process::exit(2);
+        let (flag, inline) = match a.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f.to_owned(), Some(v.to_owned())),
+            _ => (a.clone(), None),
+        };
+        let mut value = || inline.clone().or_else(|| args.next()).unwrap_or_else(|| fail(USAGE));
+        match flag.as_str() {
+            "--" => voxl_args.extend(args.by_ref()),
+            "--server" => server = Some(value()),
+            "--config" => config = Some(PathBuf::from(value())),
+            "--token" => token = Some(value()),
+            "-h" | "--help" => {
+                println!("{USAGE}");
+                return;
+            }
+            _ => fail(&format!("unknown argument {a:?}; voxl's flags go after --\n{USAGE}")),
         }
     }
-    let (Some(server), Some(key)) = (server, key) else {
-        eprintln!("usage: ithub-agent --server wss://host --key KEY [-- voxl flags]");
-        eprintln!("(or set ITHUB_SERVER and ITHUB_AGENT_KEY)");
-        std::process::exit(2);
-    };
-    let server = server
-        .trim_end_matches('/')
-        .replacen("https://", "wss://", 1)
-        .replacen("http://", "ws://", 1);
+    let config = config.unwrap_or_else(default_config);
 
+    if command == "enroll" {
+        let (Some(server), Some(token)) = (server, token) else {
+            fail(USAGE);
+        };
+        if let Err(e) = enroll(&server, &token, &config) {
+            fail(&format!("enroll failed: {e}"));
+        }
+        return;
+    }
+
+    let identity = load(&config).unwrap_or_else(|e| {
+        fail(&format!("not enrolled ({e}); run `ithub-agent enroll --server URL --token TOKEN` first"))
+    });
     // A free loopback port for voxl: bind, read it back, release.
     let voxl_port = std::net::TcpListener::bind("127.0.0.1:0")
         .and_then(|l| l.local_addr())
         .expect("free port")
         .port();
     let cfg = Config {
-        server,
-        key,
-        id: agent_id(),
+        server: ws_base(server.as_deref().unwrap_or(&identity.server)),
+        device_id: identity.device_id,
+        secret: identity.secret,
         voxl_port,
         voxl_token: random_hex(24),
     };
@@ -113,7 +191,7 @@ fn main() {
         format!("--basic-auth-password={}", cfg.voxl_token),
     ];
     voxl.extend(voxl_args);
-    log::info!("agent {} -> {}", cfg.id, cfg.server);
+    log::info!("agent {} -> {}", cfg.device_id, cfg.server);
 
     std::thread::spawn(move || {
         tokio::runtime::Builder::new_current_thread()
@@ -132,7 +210,7 @@ fn request(cfg: &Config, path: &str) -> tokio_tungstenite::tungstenite::handshak
         .expect("server URL");
     req.headers_mut().insert(
         "authorization",
-        HeaderValue::from_str(&format!("Bearer {}", cfg.key)).expect("agent key"),
+        HeaderValue::from_str(&format!("Bearer {}:{}", cfg.device_id, cfg.secret)).expect("device secret"),
     );
     req
 }
@@ -160,7 +238,7 @@ async fn control(cfg: &std::sync::Arc<Config>) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let (mut tx, mut rx) = ws.split();
     let hello = AgentMsg::Hello {
-        id: cfg.id.clone(),
+        id: cfg.device_id.clone(),
         hostname: hostname(),
         os: std::env::consts::OS.into(),
         voxl_token: cfg.voxl_token.clone(),

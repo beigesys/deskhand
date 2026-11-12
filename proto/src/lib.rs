@@ -51,3 +51,19 @@ pub struct ShellControl {
     /// New size, as `[cols, rows]`.
     pub resize: Option<(u16, u16)>,
 }
+
+/// `POST /api/enroll` body: an enrollment token from the dashboard, traded once for this
+/// device's id and secret.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EnrollRequest {
+    pub token: String,
+    pub hostname: String,
+    pub os: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EnrollResponse {
+    pub device_id: String,
+    /// Sent as `Authorization: Bearer {device_id}:{secret}` on every agent socket.
+    pub secret: String,
+}

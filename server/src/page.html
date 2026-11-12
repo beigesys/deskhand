@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ithub {{title}}</title>
+<style>
+:root { color-scheme: light dark; --bg: #f6f7f9; --fg: #111; --muted: #6b7280; --card: #fff; --line: #d8dbe0; --ok: #16a34a; --off: #9ca3af; --accent: #2563eb; --danger: #dc2626; }
+@media (prefers-color-scheme: dark) { :root { --bg: #111317; --fg: #e8eaed; --muted: #9aa0a6; --card: #1a1d23; --line: #2c313a; --off: #4b5563; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px system-ui, sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+header h1 { font-size: 18px; margin: 0; }
+header nav { display: flex; gap: 4px; flex: 1; flex-wrap: wrap; }
+header nav a { color: var(--muted); text-decoration: none; padding: 6px 10px; border-radius: 6px; }
+header nav a.on { color: var(--fg); background: var(--card); border: 1px solid var(--line); }
+header .me { display: flex; gap: 10px; align-items: center; color: var(--muted); font-size: 13px; }
+main { max-width: 900px; margin: 0 auto; padding: 16px; display: grid; gap: 8px; }
+h2 { font-size: 16px; margin: 8px 0 4px; } h3 { font-size: 14px; margin: 12px 0 4px; }
+button, input, select { font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+button { cursor: pointer; } button:hover { border-color: var(--muted); }
+button.danger { color: var(--danger); }
+.bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 12px 14px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+.row > div:first-of-type, .row > .dot + div { flex: 1; min-width: 160px; }
+.row form { margin: 0; }
+.dev details { flex-basis: 100%; }
+.dev summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.manage { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; } .manage form { display: flex; gap: 6px; }
+.acts { display: flex; gap: 6px; }
+.acts a { color: var(--fg); text-decoration: none; border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; font-size: 13px; }
+.acts a:hover { border-color: var(--muted); }
+.muted { color: var(--muted); font-size: 13px; text-decoration: none; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--off); } .dot.on { background: var(--ok); }
+.empty { color: var(--muted); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+.card.new { border-color: var(--accent); }
+.grid { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; } .grid label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; font-size: 13px; margin: 0; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; } th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.tablewrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+<header><h1>ithub</h1><nav>{{nav}}</nav><div class="me"><span>{{user}}</span><form method="post" action="/logout"><button>Sign out</button></form></div></header>
+<main>{{body}}</main>
+</body>
+</html>

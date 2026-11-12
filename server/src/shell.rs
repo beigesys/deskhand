@@ -1,21 +1,24 @@
 //! `/d/{id}/shell`: a terminal on the device in the browser (xterm.js). The page's socket
 //! is relayed frame for frame to a shell stream the agent opens.
 
-use crate::{esc, open_stream, signed_in, Shared};
+use crate::auth::require;
+use crate::db::Role;
+use crate::{esc, now, open_stream, Shared};
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::response::{Html, IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
 use ithub_proto::StreamKind;
 
 pub async fn page(State(app): State<Shared>, Path(id): Path<String>, headers: HeaderMap) -> Response {
-    if !signed_in(&app, &headers) {
-        return Redirect::to("/login").into_response();
+    if let Err(r) = require(&app, &headers, Role::Operator) {
+        return r;
     }
-    let Some(host) = app.agents.lock().unwrap().get(&id).map(|a| a.hostname.clone()) else {
+    if !app.agents.lock().unwrap().contains_key(&id) {
         return (StatusCode::NOT_FOUND, "device offline").into_response();
-    };
+    }
+    let host = app.db.device_name(&id).ok().flatten().unwrap_or_else(|| id.clone());
     Html(include_str!("shell.html").replace("{{host}}", &esc(&host))).into_response()
 }
 
@@ -32,9 +35,12 @@ pub async fn socket(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    if !signed_in(&app, &headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
+    let user = match require(&app, &headers, Role::Operator) {
+        Ok(u) => u,
+        // A socket can't follow a redirect: say 401 rather than sending the sign-in page.
+        Err(r) if r.status() == StatusCode::FORBIDDEN => return r,
+        Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
+    };
     if !app.agents.lock().unwrap().contains_key(&id) {
         return (StatusCode::NOT_FOUND, "device offline").into_response();
     }
@@ -42,6 +48,7 @@ pub async fn socket(
         cols: size.cols.unwrap_or(80),
         rows: size.rows.unwrap_or(24),
     };
+    app.db.audit(now(), Some(user.id), Some(&id), "shell.open", "");
     ws.on_upgrade(move |browser| async move {
         match open_stream(&app, &id, kind).await {
             Some(agent) => relay(browser, agent).await,

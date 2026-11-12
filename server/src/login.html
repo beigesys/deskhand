@@ -19,10 +19,12 @@ button { border: 0; background: var(--accent); color: #fff; cursor: pointer; }
 <body>
 <form method="post" action="/login">
 <h1>ithub</h1>
-<p class="bad" id="bad">Wrong password.</p>
-<input type="password" name="password" placeholder="Admin password" autofocus required>
+<p class="bad" id="bad">Wrong user name or password.</p>
+<p class="bad" id="slow">Too many attempts. Wait a minute.</p>
+<input name="username" placeholder="User name" autocomplete="username" autofocus required>
+<input type="password" name="password" placeholder="Password" autocomplete="current-password" required>
 <button>Sign in</button>
 </form>
-<script>if (location.search.includes('bad')) document.getElementById('bad').style.display = 'block';</script>
+<script>for (const k of ['bad', 'slow']) if (location.search.includes(k)) document.getElementById(k).style.display = 'block';</script>
 </body>
 </html>
