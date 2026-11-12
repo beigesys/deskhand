@@ -26,8 +26,8 @@ None. voxl's `build.rs` calls `vcpkg::Config::new().find_package(..)`, which rea
 `VCPKGRS_TRIPLET`. The vcpkg crate also requires `crt-static` with a `*-static` triplet,
 and `.cargo/config.toml` supplies it. voxl's own CI uses `x64-windows-static-md`,
 which links the CRT dynamically and so breaks the rule. ithub's CI uses
-`x64-windows-static` instead. With mingw, libyuv's C++ runtime (libstdc++, libgcc,
-winpthread) is linked statically by Rust's self-contained mingw linking. The import
+`x64-windows-static` instead. With mingw, the C/C++ runtime pieces the codecs need (libgcc, winpthread) are linked
+statically by Rust's self-contained mingw linking. The codecs are libvpx (VP9) and OpenH264. The import
 check confirms this.
 
 ## Running as a service (login screen, UAC, any user)
