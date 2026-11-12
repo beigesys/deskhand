@@ -1,0 +1,8 @@
+# Shipped binaries rely on nothing but the OS: the C runtime is linked in.
+# Set per target (not RUSTFLAGS) so host build scripts and proc macros are left alone;
+# build Windows with an explicit --target.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "target-feature=+crt-static"]
