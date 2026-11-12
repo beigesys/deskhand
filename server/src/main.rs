@@ -7,6 +7,7 @@
 //! - `ITHUB_AGENT_KEY` (required): the shared secret agents present
 
 mod proxy;
+mod shell;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
@@ -15,7 +16,7 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{any, get, post};
 use axum::{Form, Router};
 use futures_util::{SinkExt, StreamExt};
-use ithub_proto::{AgentMsg, ServerMsg};
+use ithub_proto::{AgentMsg, ServerMsg, StreamKind};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -86,6 +87,8 @@ async fn main() {
         .route("/agent/connect", get(agent_connect))
         .route("/agent/stream/{sid}", get(agent_stream))
         .route("/d/{id}", get(|Path(id): Path<String>| async move { Redirect::to(&format!("/d/{id}/")) }))
+        .route("/d/{id}/shell", get(shell::page))
+        .route("/d/{id}/shell/ws", get(shell::socket))
         .route("/d/{id}/", any(proxy::device))
         .route("/d/{id}/{*rest}", any(proxy::device))
         .with_state(app);
@@ -152,7 +155,7 @@ async fn logout(State(app): State<Shared>, headers: HeaderMap) -> Response {
 
 // --- dashboard ---
 
-fn esc(s: &str) -> String {
+pub fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -178,7 +181,7 @@ async fn dashboard(State(app): State<Shared>, headers: HeaderMap) -> Response {
         rows.iter()
             .map(|(id, host, os, since)| {
                 format!(
-                    r#"<a class="dev" href="/d/{id}/"><span class="dot"></span><b>{host}</b><span>{os}</span><span>online {up}</span></a>"#,
+                    r#"<div class="dev"><span class="dot"></span><b>{host}</b><span>{os}</span><span>online {up}</span><span class="acts"><a href="/d/{id}/">Desktop</a><a href="/d/{id}/shell">Shell</a></span></div>"#,
                     id = esc(id),
                     host = esc(host),
                     os = esc(os),
@@ -279,7 +282,7 @@ async fn agent_stream(
 }
 
 /// Asks the agent for a new stream and waits for it to connect back.
-pub async fn open_stream(app: &App, id: &str) -> Option<WebSocket> {
+pub async fn open_stream(app: &App, id: &str, kind: StreamKind) -> Option<WebSocket> {
     let sid = random_hex(16);
     let (tx, rx) = oneshot::channel();
     app.pending.lock().unwrap().insert(sid.clone(), tx);
@@ -288,7 +291,7 @@ pub async fn open_stream(app: &App, id: &str) -> Option<WebSocket> {
         .lock()
         .unwrap()
         .get(id)
-        .is_some_and(|a| a.tx.send(ServerMsg::Open { sid: sid.clone() }).is_ok());
+        .is_some_and(|a| a.tx.send(ServerMsg::Open { sid: sid.clone(), kind }).is_ok());
     let ws = if sent {
         tokio::time::timeout(Duration::from_secs(10), rx).await.ok().and_then(|r| r.ok())
     } else {

@@ -5,8 +5,10 @@
 //! also accepted) and `--key` / `ITHUB_AGENT_KEY` (the server's agent key). Arguments after
 //! `--` go to voxl as they are.
 
+mod shell;
+
 use futures_util::{SinkExt, StreamExt};
-use ithub_proto::{AgentMsg, ServerMsg};
+use ithub_proto::{AgentMsg, ServerMsg, StreamKind};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -170,10 +172,19 @@ async fn control(cfg: &std::sync::Arc<Config>) -> Result<(), String> {
     while let Some(m) = rx.next().await {
         match m.map_err(|e| e.to_string())? {
             Message::Text(t) => match serde_json::from_str(&t) {
-                Ok(ServerMsg::Open { sid }) => {
+                Ok(ServerMsg::Open { sid, kind }) => {
                     let cfg = cfg.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = stream(&cfg, &sid).await {
+                        let r = match kind {
+                            StreamKind::Desktop => stream(&cfg, &sid).await,
+                            StreamKind::Shell { cols, rows } => {
+                                match open(&cfg, &sid).await {
+                                    Ok(ws) => shell::run(ws, cols, rows).await,
+                                    Err(e) => Err(e),
+                                }
+                            }
+                        };
+                        if let Err(e) = r {
                             log::warn!("stream {sid}: {e}");
                         }
                     });
@@ -187,15 +198,24 @@ async fn control(cfg: &std::sync::Arc<Config>) -> Result<(), String> {
     Ok(())
 }
 
-/// One stream: the server's socket for this sid, piped to a new connection to voxl.
+/// Dials the server's socket for this sid.
+async fn open(
+    cfg: &Config,
+    sid: &str,
+) -> Result<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>, String> {
+    let (ws, _) = tokio_tungstenite::connect_async(request(cfg, &format!("/agent/stream/{sid}")))
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(ws)
+}
+
+/// One desktop stream: the server's socket for this sid, piped to a new connection to voxl.
 async fn stream(cfg: &Config, sid: &str) -> Result<(), String> {
     let tcp = TcpStream::connect(("127.0.0.1", cfg.voxl_port))
         .await
         .map_err(|e| format!("voxl: {e}"))?;
     tcp.set_nodelay(true).ok();
-    let (ws, _) = tokio_tungstenite::connect_async(request(cfg, &format!("/agent/stream/{sid}")))
-        .await
-        .map_err(|e| e.to_string())?;
+    let ws = open(cfg, sid).await?;
     let (mut wtx, mut wrx) = ws.split();
     let (mut r, mut w) = tcp.into_split();
     let out = async {

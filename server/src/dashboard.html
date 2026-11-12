@@ -13,11 +13,14 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 header h1 { font-size: 18px; margin: 0; }
 header button { background: none; border: 1px solid var(--line); color: var(--fg); border-radius: 6px; padding: 6px 10px; cursor: pointer; font: inherit; }
 main { max-width: 800px; margin: 0 auto; padding: 16px; display: grid; gap: 8px; }
-.dev { display: grid; grid-template-columns: 10px 1fr auto auto; gap: 12px; align-items: center; padding: 12px 14px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; color: inherit; text-decoration: none; }
-.dev:hover { border-color: var(--muted); }
-.dev span:not(.dot) { color: var(--muted); font-size: 13px; }
+.dev { display: grid; grid-template-columns: 10px 1fr auto auto auto; gap: 12px; align-items: center; padding: 12px 14px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; color: inherit; text-decoration: none; }
+.acts { display: flex; gap: 6px; }
+.acts a { color: var(--fg); text-decoration: none; border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; font-size: 13px; }
+.acts a:hover { border-color: var(--muted); }
+.dev > span:not(.dot):not(.acts) { color: var(--muted); font-size: 13px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
 .empty { color: var(--muted); }
+@media (max-width: 560px) { .dev { grid-template-columns: 10px 1fr auto; } .dev > span:nth-of-type(2), .dev > span:nth-of-type(3) { display: none; } }
 </style>
 </head>
 <body>

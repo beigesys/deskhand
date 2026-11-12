@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{host}} shell</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/css/xterm.css">
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.11.0/lib/addon-fit.js"></script>
+<style>
+:root { --bg: #0d0f12; --fg: #e8eaed; --muted: #9aa0a6; --line: #2c313a; --ok: #16a34a; --bad: #dc2626; }
+html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); font: 14px system-ui, sans-serif; }
+body { display: flex; flex-direction: column; }
+header { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+header a { color: var(--muted); text-decoration: none; }
+header a:hover { color: var(--fg); }
+header b { font-weight: 600; }
+#state { margin-left: auto; color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 6px; }
+#state::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+#state.on::before { background: var(--ok); }
+#state.off::before { background: var(--bad); }
+#term { flex: 1; min-height: 0; padding: 6px 0 0 8px; }
+</style>
+</head>
+<body>
+<header><a href="/">&larr; Devices</a><b>{{host}}</b><span>shell</span><span id="state">connecting</span></header>
+<div id="term"></div>
+<script>
+const term = new Terminal({
+	cursorBlink: true,
+	fontFamily: 'ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace',
+	fontSize: 14,
+	theme: { background: '#0d0f12' },
+});
+const fit = new FitAddon.FitAddon();
+term.loadAddon(fit);
+term.open(document.getElementById('term'));
+fit.fit();
+const state = document.getElementById('state');
+const url = new URL('shell/ws', location.href);
+url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+url.search = `?cols=${term.cols}&rows=${term.rows}`;
+const ws = new WebSocket(url);
+ws.binaryType = 'arraybuffer';
+const enc = new TextEncoder();
+ws.onopen = () => { state.textContent = 'connected'; state.className = 'on'; term.focus(); };
+ws.onmessage = (e) => term.write(typeof e.data === 'string' ? e.data : new Uint8Array(e.data));
+ws.onclose = (e) => {
+	state.textContent = e.reason || 'disconnected';
+	state.className = 'off';
+	term.write('\r\n\x1b[90m[session closed]\x1b[0m\r\n');
+};
+term.onData((d) => ws.readyState === 1 && ws.send(enc.encode(d)));
+term.onBinary((d) => ws.readyState === 1 && ws.send(Uint8Array.from(d, (c) => c.charCodeAt(0))));
+term.onResize(({ cols, rows }) => ws.readyState === 1 && ws.send(JSON.stringify({ resize: [cols, rows] })));
+new ResizeObserver(() => fit.fit()).observe(document.getElementById('term'));
+</script>
+</body>
+</html>

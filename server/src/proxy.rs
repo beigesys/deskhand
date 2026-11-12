@@ -3,6 +3,7 @@
 //! `/d/{id}/` prefix unchanged.
 
 use crate::{open_stream, signed_in, Shared};
+use ithub_proto::StreamKind;
 use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{Request, State};
@@ -28,7 +29,7 @@ pub async fn device(State(app): State<Shared>, mut req: Request) -> Response {
     let Some(token) = app.agents.lock().unwrap().get(&id).map(|a| a.voxl_token.clone()) else {
         return (StatusCode::NOT_FOUND, "device offline").into_response();
     };
-    let Some(ws) = open_stream(&app, &id).await else {
+    let Some(ws) = open_stream(&app, &id, StreamKind::Desktop).await else {
         return (StatusCode::BAD_GATEWAY, "device didn't open a stream").into_response();
     };
     let (io, far) = tokio::io::duplex(256 * 1024);
