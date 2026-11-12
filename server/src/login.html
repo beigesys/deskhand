@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ithub sign in</title>
+<style>
+:root { color-scheme: light dark; --bg: #f6f7f9; --fg: #111; --card: #fff; --line: #d8dbe0; --accent: #2563eb; }
+@media (prefers-color-scheme: dark) { :root { --bg: #111317; --fg: #e8eaed; --card: #1a1d23; --line: #2c313a; } }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--fg); font: 15px system-ui, sans-serif; }
+form { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 24px; width: min(320px, calc(100vw - 32px)); box-sizing: border-box; }
+h1 { font-size: 18px; margin: 0 0 16px; }
+input, button { width: 100%; box-sizing: border-box; padding: 10px; border-radius: 6px; font: inherit; }
+input { border: 1px solid var(--line); background: var(--bg); color: var(--fg); margin-bottom: 12px; }
+button { border: 0; background: var(--accent); color: #fff; cursor: pointer; }
+.bad { color: #dc2626; font-size: 13px; margin: 0 0 12px; display: none; }
+</style>
+</head>
+<body>
+<form method="post" action="/login">
+<h1>ithub</h1>
+<p class="bad" id="bad">Wrong password.</p>
+<input type="password" name="password" placeholder="Admin password" autofocus required>
+<button>Sign in</button>
+</form>
+<script>if (location.search.includes('bad')) document.getElementById('bad').style.display = 'block';</script>
+</body>
+</html>
