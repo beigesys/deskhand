@@ -14,6 +14,10 @@ decoded in the browser with WebCodecs, at up to 60 fps.
 - `agent/`: runs voxl on a random loopback port and keeps a control socket open to the
   server. For each browser request the server asks for a stream, and the agent opens
   one and pipes it to voxl.
+- Inventory: the agent reports OS, hardware, disks, network, installed software and
+  security state (BitLocker/LUKS, Defender, firewall, pending reboot) when it connects,
+  every 4 hours, and on Refresh. The server keeps the last 30 snapshots per device and
+  shows them at `/devices/{id}`; `/devices.csv` exports the device list.
 - `proto/`: the control messages they exchange.
 
 ## Build (Linux)

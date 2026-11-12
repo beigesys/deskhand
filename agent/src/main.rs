@@ -7,6 +7,7 @@
 //!   server URL; `--config` / `ITHUB_CONFIG` picks another file (several agents on one
 //!   machine while developing). Arguments after `--` go to voxl as they are.
 
+mod inventory;
 mod shell;
 
 use futures_util::{SinkExt, StreamExt};
@@ -23,6 +24,28 @@ fn random_hex(bytes: usize) -> String {
     let mut b = vec![0u8; bytes];
     getrandom::fill(&mut b).expect("random bytes");
     hex::encode(b)
+}
+
+pub fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// `YYYY-MM-DD` (UTC) for Unix seconds.
+pub fn iso_date(t: i64) -> String {
+    // Howard Hinnant's days-to-civil.
+    let z = t.div_euclid(86400) + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
 }
 
 fn hostname() -> String {
@@ -247,9 +270,33 @@ async fn control(cfg: &std::sync::Arc<Config>) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
     log::info!("connected to {}", cfg.server);
-    while let Some(m) = rx.next().await {
+    // Inventory: once now, every few hours, and when the server asks.
+    let (inv_tx, mut inv_rx) = tokio::sync::mpsc::channel::<ithub_proto::Inventory>(1);
+    let mut inv_timer = tokio::time::interval(INVENTORY_EVERY);
+    let mut collecting = false;
+    loop {
+        let m = tokio::select! {
+            m = rx.next() => match m {
+                Some(m) => m,
+                None => break,
+            },
+            _ = inv_timer.tick() => {
+                start_inventory(&inv_tx, &mut collecting);
+                continue;
+            }
+            Some(inv) = inv_rx.recv() => {
+                collecting = false;
+                let msg = AgentMsg::Inventory { inventory: Box::new(inv) };
+                tx.send(Message::Text(serde_json::to_string(&msg).unwrap().into()))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                log::info!("sent inventory");
+                continue;
+            }
+        };
         match m.map_err(|e| e.to_string())? {
             Message::Text(t) => match serde_json::from_str(&t) {
+                Ok(ServerMsg::RefreshInventory) => start_inventory(&inv_tx, &mut collecting),
                 Ok(ServerMsg::Open { sid, kind }) => {
                     let cfg = cfg.clone();
                     tokio::spawn(async move {
@@ -274,6 +321,19 @@ async fn control(cfg: &std::sync::Arc<Config>) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+const INVENTORY_EVERY: Duration = Duration::from_secs(4 * 3600);
+
+/// Starts a collection unless one is already running; the result arrives on `tx`.
+fn start_inventory(tx: &tokio::sync::mpsc::Sender<ithub_proto::Inventory>, collecting: &mut bool) {
+    if std::mem::replace(collecting, true) {
+        return;
+    }
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let _ = tx.send(inventory::collect().await).await;
+    });
 }
 
 /// Dials the server's socket for this sid.

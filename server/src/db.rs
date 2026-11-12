@@ -64,7 +64,28 @@ CREATE TABLE user_identities (
     created INTEGER NOT NULL,
     PRIMARY KEY (provider, subject)
 );
+"#, r#"
+ALTER TABLE devices ADD COLUMN inv_os TEXT;
+ALTER TABLE devices ADD COLUMN inv_os_version TEXT;
+ALTER TABLE devices ADD COLUMN inv_serial TEXT;
+ALTER TABLE devices ADD COLUMN inv_ram INTEGER;
+ALTER TABLE devices ADD COLUMN inv_last_boot INTEGER;
+ALTER TABLE devices ADD COLUMN inv_at INTEGER;
+CREATE INDEX devices_inv_os ON devices(inv_os, inv_os_version);
+CREATE INDEX devices_inv_serial ON devices(inv_serial);
+CREATE INDEX devices_inv_ram ON devices(inv_ram);
+CREATE INDEX devices_inv_last_boot ON devices(inv_last_boot);
+CREATE TABLE inventory (
+    id INTEGER PRIMARY KEY,
+    device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    ts INTEGER NOT NULL,
+    json TEXT NOT NULL
+);
+CREATE INDEX inventory_device ON inventory(device_id, id);
 "#];
+
+/// Inventory snapshots kept per device.
+const INVENTORY_HISTORY: i64 = 30;
 
 /// SHA-256 in hex, for tokens and secrets: they're random and long, so a fast hash is
 /// enough (passwords get argon2).
@@ -112,6 +133,10 @@ pub struct Device {
     pub group_id: Option<i64>,
     pub group: Option<String>,
     pub last_seen: i64,
+    /// From the latest inventory.
+    pub inv_os: Option<String>,
+    pub inv_os_version: Option<String>,
+    pub inv_last_boot: Option<i64>,
 }
 
 pub struct Group {
@@ -357,7 +382,8 @@ impl Db {
     pub fn devices(&self, group: Option<i64>) -> R<Vec<Device>> {
         let c = self.c();
         let mut s = c.prepare(
-            "SELECT d.id, d.name, d.hostname, d.os, d.group_id, g.name, d.last_seen
+            "SELECT d.id, d.name, d.hostname, d.os, d.group_id, g.name, d.last_seen,
+                    d.inv_os, d.inv_os_version, d.inv_last_boot
              FROM devices d LEFT JOIN groups g ON g.id = d.group_id
              WHERE ?1 IS NULL OR d.group_id = ?1
              ORDER BY d.name COLLATE NOCASE",
@@ -371,9 +397,74 @@ impl Db {
                 group_id: r.get(4)?,
                 group: r.get(5)?,
                 last_seen: r.get(6)?,
+                inv_os: r.get(7)?,
+                inv_os_version: r.get(8)?,
+                inv_last_boot: r.get(9)?,
             })
         })?;
         rows.collect()
+    }
+
+    pub fn device(&self, id: &str) -> R<Option<Device>> {
+        Ok(self.devices(None)?.into_iter().find(|d| d.id == id))
+    }
+
+    // --- inventory ---
+
+    /// Saves a snapshot, updates the device's summary columns and keeps the newest
+    /// [`INVENTORY_HISTORY`].
+    pub fn save_inventory(&self, device: &str, inv: &ithub_proto::Inventory, now: i64) -> R<()> {
+        let json = serde_json::to_string(inv).expect("inventory json");
+        let mut c = self.c();
+        let tx = c.transaction()?;
+        tx.execute("INSERT INTO inventory (device_id, ts, json) VALUES (?1, ?2, ?3)", params![device, now, json])?;
+        tx.execute(
+            "UPDATE devices SET inv_os = ?2, inv_os_version = ?3, inv_serial = ?4, inv_ram = ?5,
+                    inv_last_boot = ?6, inv_at = ?7 WHERE id = ?1",
+            params![
+                device,
+                inv.os.name,
+                inv.os.version,
+                inv.hardware.serial,
+                inv.memory.total.map(|n| n as i64),
+                inv.last_boot,
+                now
+            ],
+        )?;
+        tx.execute(
+            "DELETE FROM inventory WHERE device_id = ?1 AND id NOT IN
+             (SELECT id FROM inventory WHERE device_id = ?1 ORDER BY id DESC LIMIT ?2)",
+            params![device, INVENTORY_HISTORY],
+        )?;
+        tx.commit()
+    }
+
+    /// The newest snapshot and when the server got it.
+    pub fn inventory(&self, device: &str) -> R<Option<(i64, ithub_proto::Inventory)>> {
+        let row: Option<(i64, String)> = self
+            .c()
+            .query_row(
+                "SELECT ts, json FROM inventory WHERE device_id = ?1 ORDER BY id DESC LIMIT 1",
+                [device],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        Ok(row.map(|(ts, j)| (ts, serde_json::from_str(&j).unwrap_or_default())))
+    }
+
+    /// Every device's newest snapshot, by device id, for the CSV export.
+    pub fn latest_inventories(&self) -> R<std::collections::HashMap<String, ithub_proto::Inventory>> {
+        let c = self.c();
+        let mut s = c.prepare(
+            "SELECT device_id, json FROM inventory WHERE id IN (SELECT max(id) FROM inventory GROUP BY device_id)",
+        )?;
+        let rows = s.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        rows.map(|r| r.map(|(id, j)| (id, serde_json::from_str(&j).unwrap_or_default()))).collect()
+    }
+
+    /// How many snapshots the device has, for the detail page.
+    pub fn inventory_count(&self, device: &str) -> R<i64> {
+        self.c().query_row("SELECT count(*) FROM inventory WHERE device_id = ?1", [device], |r| r.get(0))
     }
 
     pub fn device_name(&self, id: &str) -> R<Option<String>> {

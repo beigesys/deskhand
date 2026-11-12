@@ -39,6 +39,19 @@ button.danger { color: var(--danger); }
 pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; font-size: 13px; margin: 0; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; } th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .tablewrap { overflow-x: auto; }
+a.name { color: var(--fg); text-decoration: none; } a.name:hover { text-decoration: underline; }
+.dev h2 { margin: 4px 0; }
+.acts form { display: inline; } .acts button { font-size: 13px; padding: 4px 10px; }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; position: sticky; top: 0; background: var(--bg); padding: 6px 0; z-index: 1; }
+.tabs a { color: var(--muted); text-decoration: none; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; }
+.tabs a:hover { color: var(--fg); }
+section.card { scroll-margin-top: 48px; }
+table.kv th { width: 160px; color: var(--muted); font-weight: normal; }
+.badge { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--line); color: var(--muted); }
+.badge.ok { color: var(--ok); border-color: var(--ok); } .badge.bad { color: var(--danger); border-color: var(--danger); } .badge.warn { color: #d97706; border-color: #d97706; }
+.meter { display: inline-block; width: 80px; height: 6px; background: var(--line); border-radius: 3px; vertical-align: middle; overflow: hidden; }
+.meter > span { display: block; height: 100%; background: var(--accent); } .meter.warn > span { background: #d97706; } .meter.bad > span { background: var(--danger); }
+#swq { width: 100%; margin: 4px 0 8px; }
 </style>
 </head>
 <body>

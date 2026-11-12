@@ -35,13 +35,13 @@ fn until(s: i64) -> String {
     }
 }
 
-fn db_error(e: rusqlite::Error) -> Response {
+pub(crate) fn db_error(e: rusqlite::Error) -> Response {
     log::error!("db: {e}");
     (StatusCode::INTERNAL_SERVER_ERROR, "database error").into_response()
 }
 
 /// The page frame: header with navigation for the user's role, then `body`.
-fn page(user: &User, active: &str, title: &str, body: &str) -> Response {
+pub(crate) fn page(user: &User, active: &str, title: &str, body: &str) -> Response {
     let mut nav = String::new();
     let mut links = vec![("devices", "/", "Devices")];
     if user.role == Role::Admin {
@@ -108,7 +108,7 @@ pub async fn devices(State(app): State<Shared>, headers: HeaderMap, Query(f): Qu
     let mut b = String::new();
     let _ = write!(
         b,
-        r#"<form class="bar" method="get"><select name="group" onchange="this.form.submit()">{}</select><span class="muted">{} devices, {} online</span></form>"#,
+        r#"<form class="bar" method="get"><select name="group" onchange="this.form.submit()">{}</select><span class="muted">{} devices, {} online</span><a class="muted" href="/devices.csv">Export CSV</a></form>"#,
         group_options(&groups, group, "All groups"),
         devices.len(),
         devices.iter().filter(|d| online.contains_key(&d.id)).count(),
@@ -140,12 +140,19 @@ pub async fn devices(State(app): State<Shared>, headers: HeaderMap, Query(f): Qu
         } else {
             String::new()
         };
+        // The inventory's OS ("Ubuntu 24.04") when there is one, else what Hello said ("linux").
+        let os = match (&d.inv_os, &d.inv_os_version) {
+            (Some(n), Some(v)) => format!("{n} {v}"),
+            (Some(n), None) => n.clone(),
+            _ => d.os.clone(),
+        };
+        let boot = d.inv_last_boot.map_or(String::new(), |t| format!(" · booted {}", ago(now - t)));
         let _ = write!(
             b,
-            r#"<div class="row dev"><span class="dot {dot}"></span><div><b>{name}</b><div class="muted">{host} · {os} · {group}</div></div><span class="muted">{status}</span><span class="acts">{acts}</span>{manage}</div>"#,
+            r#"<div class="row dev"><span class="dot {dot}"></span><div><a class="name" href="/devices/{id}"><b>{name}</b></a><div class="muted">{host} · {os} · {group}{boot}</div></div><span class="muted">{status}</span><span class="acts">{acts}</span>{manage}</div>"#,
             name = esc(&d.name),
             host = esc(&d.hostname),
-            os = esc(&d.os),
+            os = esc(&os),
             group = esc(d.group.as_deref().unwrap_or("no group")),
         );
     }

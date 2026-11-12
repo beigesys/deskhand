@@ -13,13 +13,14 @@
 
 mod auth;
 mod db;
+mod inventory;
 mod proxy;
 mod shell;
 mod sso;
 mod ui;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, State};
+use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{any, get, post};
@@ -76,6 +77,22 @@ pub fn now() -> i64 {
         .unwrap_or(0)
 }
 
+/// `YYYY-MM-DDTHH:MM:SSZ` for Unix seconds.
+pub fn iso_datetime(t: i64) -> String {
+    // Howard Hinnant's days-to-civil.
+    let (days, secs) = (t.div_euclid(86400), t.rem_euclid(86400));
+    let z = days + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", secs / 3600, secs % 3600 / 60, secs % 60)
+}
+
 pub fn same(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0, |d, (x, y)| d | (x ^ y)) == 0
 }
@@ -123,6 +140,9 @@ async fn main() {
         .route("/setup", get(auth::setup_page).post(auth::setup))
         .route("/auth/{provider}/start", get(auth::sso_start))
         .route("/auth/{provider}/callback", get(auth::sso_callback))
+        .route("/devices.csv", get(inventory::csv))
+        .route("/devices/{id}", get(inventory::detail))
+        .route("/devices/{id}/refresh", post(inventory::refresh))
         .route("/devices/{id}/rename", post(ui::rename_device))
         .route("/devices/{id}/move", post(ui::move_device))
         .route("/devices/{id}/delete", post(ui::delete_device))
@@ -188,15 +208,21 @@ fn agent_device(app: &App, headers: &HeaderMap) -> Option<String> {
     same(&db::token_hash(secret), &expected).then(|| id.to_owned())
 }
 
-async fn agent_connect(State(app): State<Shared>, headers: HeaderMap, ws: WebSocketUpgrade) -> Response {
+async fn agent_connect(
+    State(app): State<Shared>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Response {
     let Some(id) = agent_device(&app, &headers) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    ws.on_upgrade(move |ws| control(app, id, ws))
+    let ip = auth::client_ip(&app, &headers, peer).to_string();
+    ws.on_upgrade(move |ws| control(app, id, ip, ws))
 }
 
 /// One agent's control socket: a Hello, then Open messages out until it closes.
-async fn control(app: Shared, id: String, ws: WebSocket) {
+async fn control(app: Shared, id: String, ip: String, ws: WebSocket) {
     let (mut wtx, mut wrx) = ws.split();
     let hello = tokio::time::timeout(Duration::from_secs(10), wrx.next()).await;
     let Ok(Some(Ok(Message::Text(t)))) = hello else {
@@ -225,6 +251,16 @@ async fn control(app: Shared, id: String, ws: WebSocket) {
             }
             m = wrx.next() => match m {
                 Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                Some(Ok(Message::Text(t))) => match serde_json::from_str::<AgentMsg>(&t) {
+                    Ok(AgentMsg::Inventory { mut inventory }) => {
+                        inventory.public_ip = Some(ip.clone());
+                        if let Err(e) = app.db.save_inventory(&id, &inventory, now()) {
+                            log::error!("saving inventory for {id}: {e}");
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => log::warn!("agent {id} sent something unreadable: {e}"),
+                },
                 _ => {}
             },
             _ = ping.tick() => {
@@ -268,6 +304,11 @@ async fn agent_stream(
     ws.on_upgrade(move |ws| async move {
         let _ = waiter.send(ws);
     })
+}
+
+/// Sends a control message to a connected agent; false when it's offline.
+pub fn send_to_agent(app: &App, id: &str, msg: ServerMsg) -> bool {
+    app.agents.lock().unwrap().get(id).is_some_and(|a| a.tx.send(msg).is_ok())
 }
 
 /// Asks the agent for a new stream and waits for it to connect back.

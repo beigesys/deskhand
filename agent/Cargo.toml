@@ -23,3 +23,9 @@ hex = "0.4"
 dirs = "6"
 ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
 portable-pty = "0.9"
+sysinfo = { version = "0.40", default-features = false, features = ["system", "disk", "network", "user"] }
+
+[target.'cfg(windows)'.dependencies]
+wmi = "0.18"
+winreg = "0.56"
+windows = { version = "0.62", features = ["Win32_System_RemoteDesktop", "Win32_Foundation"] }

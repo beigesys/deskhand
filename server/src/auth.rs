@@ -87,7 +87,7 @@ pub fn base_url(app: &App, headers: &HeaderMap) -> String {
     format!("{scheme}://{host}")
 }
 
-fn client_ip(app: &App, headers: &HeaderMap, peer: SocketAddr) -> IpAddr {
+pub fn client_ip(app: &App, headers: &HeaderMap, peer: SocketAddr) -> IpAddr {
     if app.trust_proxy {
         if let Some(ip) = headers
             .get("x-forwarded-for")
