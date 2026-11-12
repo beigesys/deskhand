@@ -16,7 +16,7 @@ use std::convert::Infallible;
 use std::fmt::Write;
 
 /// Repeated keys (`device=a&device=b`) survive, unlike with `Form`.
-fn form(body: &str) -> Vec<(String, String)> {
+pub(crate) fn form(body: &str) -> Vec<(String, String)> {
     url::form_urlencoded::parse(body.as_bytes()).into_owned().collect()
 }
 
@@ -183,7 +183,7 @@ pub async fn script(State(app): State<Shared>, headers: HeaderMap, Path(id): Pat
 }
 
 /// The script fields from a form, checked.
-fn script_fields(f: &[(String, String)]) -> Result<(String, ScriptShell, String, i64), String> {
+pub(crate) fn script_fields(f: &[(String, String)]) -> Result<(String, ScriptShell, String, i64), String> {
     let name: String = get(f, "name").chars().take(200).collect();
     if name.is_empty() {
         return Err("a script needs a name".into());
@@ -355,11 +355,29 @@ pub async fn create_job(State(app): State<Shared>, headers: HeaderMap, body: Str
         Ok(u) => u,
         Err(r) => return r,
     };
-    let f = form(&body);
+    match create_job_from(&app, &user, &form(&body)) {
+        Ok(id) => Redirect::to(&format!("/jobs/{id}")).into_response(),
+        Err((StatusCode::BAD_REQUEST, msg)) => bad(&user, &msg),
+        Err((code, msg)) => (code, msg).into_response(),
+    }
+}
+
+pub(crate) fn bad_request(msg: impl Into<String>) -> (StatusCode, String) {
+    (StatusCode::BAD_REQUEST, msg.into())
+}
+
+pub(crate) fn db_fail(e: rusqlite::Error) -> (StatusCode, String) {
+    log::error!("db: {e}");
+    (StatusCode::INTERNAL_SERVER_ERROR, "database error".into())
+}
+
+/// Makes a job from the job form's fields (also what `/api/v1/jobs` turns its JSON into)
+/// and fires it if it runs now.
+pub(crate) fn create_job_from(app: &Shared, user: &User, f: &[(String, String)]) -> Result<i64, (StatusCode, String)> {
     let source = get(&f, "source");
     let (task, timeout_s, default_name) = if let Some(id) = source.strip_prefix("script:") {
         let Some(s) = id.parse().ok().and_then(|id| app.db.script(id).ok().flatten()) else {
-            return bad(&user, "pick a script");
+            return Err(bad_request("pick a script"));
         };
         let name = s.name.clone();
         (Task::Script { script_id: Some(s.id), shell: s.shell, body: s.body }, s.timeout_s, name)
@@ -373,7 +391,7 @@ pub async fn create_job(State(app): State<Shared>, headers: HeaderMap, body: Str
             Some("lock") => Action::Lock,
             // The MACs and where to send them are worked out per device when it fires.
             Some("wake") => Action::WakeOnLan { macs: vec![], broadcasts: vec![] },
-            _ => return bad(&user, "pick a script or an action"),
+            _ => return Err(bad_request("pick a script or an action")),
         };
         let name = action.name().to_owned();
         (Task::Action(action), ACTION_TIMEOUT, name)
@@ -381,17 +399,17 @@ pub async fn create_job(State(app): State<Shared>, headers: HeaderMap, body: Str
     let target = match get(&f, "target") {
         "group" => match get(&f, "group").parse::<i64>() {
             Ok(g) => Target::Group(Some(g)),
-            Err(_) => return bad(&user, "pick a group"),
+            Err(_) => return Err(bad_request("pick a group")),
         },
         "all" => Target::All,
         _ => Target::Devices(f.iter().filter(|(k, _)| k == "device").map(|(_, v)| v.clone()).collect()),
     };
     let devices = match app.db.target_devices(&target) {
         Ok(d) => d,
-        Err(e) => return db_error(e),
+        Err(e) => return Err(db_fail(e)),
     };
     if devices.is_empty() {
-        return bad(&user, "that selects no devices");
+        return Err(bad_request("that selects no devices"));
     }
     // Reboot and shutdown: typed confirmation, checked here as well as in the page.
     if let Task::Action(Action::Reboot { .. } | Action::Shutdown { .. }) = &task {
@@ -409,14 +427,14 @@ pub async fn create_job(State(app): State<Shared>, headers: HeaderMap, body: Str
             } else {
                 format!("the number of devices, {}", devices.len())
             };
-            return bad(&user, &format!("to confirm, type {want}"));
+            return Err(bad_request(format!("to confirm, type {want}")));
         }
     }
     let schedule = match get(&f, "when") {
         "cron" => {
             let expr = get(&f, "cron").to_owned();
             if let Err(e) = jobs::check_cron(&expr) {
-                return bad(&user, &e);
+                return Err(bad_request(e));
             }
             Some(expr)
         }
@@ -442,7 +460,7 @@ pub async fn create_job(State(app): State<Shared>, headers: HeaderMap, body: Str
     let job = NewJob { name: name.clone(), task, timeout_s, target, schedule: schedule.clone(), expires_after, created_by: user.id };
     let id = match app.db.add_job(&job, now()) {
         Ok(id) => id,
-        Err(e) => return db_error(e),
+        Err(e) => return Err(db_fail(e)),
     };
     let when = schedule.as_deref().map_or("now".to_owned(), |s| format!("cron {s}"));
     app.db.audit(now(), Some(user.id), None, "job.create", &format!("{id}: {name} ({when})"));
@@ -451,19 +469,19 @@ pub async fn create_job(State(app): State<Shared>, headers: HeaderMap, body: Str
             log::error!("firing job {id}: {e}");
         }
     }
-    Redirect::to(&format!("/jobs/{id}")).into_response()
+    Ok(id)
 }
 
 // --- jobs ---
 
-fn task_text(t: &Task) -> String {
+pub(crate) fn task_text(t: &Task) -> String {
     match t {
         Task::Script { shell, .. } => format!("{} script", shell.as_str()),
         Task::Action(a) => a.name().to_owned(),
     }
 }
 
-fn target_text(app: &Shared, t: &Target) -> String {
+pub(crate) fn target_text(app: &Shared, t: &Target) -> String {
     match t {
         Target::Devices(ids) if ids.len() == 1 => {
             app.db.device_name(&ids[0]).ok().flatten().unwrap_or_else(|| "1 device".into())

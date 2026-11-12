@@ -29,18 +29,18 @@ pub fn hash_password(password: &str) -> String {
         .to_string()
 }
 
-fn verify_password(password: &str, hash: &str) -> bool {
+pub(crate) fn verify_password(password: &str, hash: &str) -> bool {
     PasswordHash::new(hash)
         .is_ok_and(|h| Argon2::default().verify_password(password.as_bytes(), &h).is_ok())
 }
 
 /// A fixed hash to check against for unknown user names, so they take as long as known ones.
-fn dummy_hash() -> &'static str {
+pub(crate) fn dummy_hash() -> &'static str {
     static H: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     H.get_or_init(|| hash_password("deskhand-dummy-password"))
 }
 
-fn cookie_value(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn cookie_value(headers: &HeaderMap) -> Option<String> {
     headers
         .get_all(header::COOKIE)
         .iter()
@@ -111,7 +111,7 @@ fn session_cookie(app: &App, headers: &HeaderMap, token: &str) -> String {
 pub struct RateLimit(Mutex<HashMap<IpAddr, Vec<Instant>>>);
 
 impl RateLimit {
-    fn allow(&self, ip: IpAddr) -> bool {
+    pub(crate) fn allow(&self, ip: IpAddr) -> bool {
         let mut m = self.0.lock().unwrap();
         let now = Instant::now();
         m.retain(|_, v| {
@@ -229,20 +229,24 @@ pub async fn login(
     start_session(&app, &headers, &user, "login", &format!("password from {ip}"))
 }
 
-fn start_session(app: &App, headers: &HeaderMap, user: &User, action: &str, detail: &str) -> Response {
+/// Starts a session for `user` and audits it: the Set-Cookie value that carries it.
+pub(crate) fn new_session(app: &App, headers: &HeaderMap, user: &User, action: &str, detail: &str) -> Option<String> {
     let token = random_hex(32);
     let now = now();
     if let Err(e) = app.db.add_session(&token, user.id, now + SESSION_SECS) {
         log::error!("session: {e}");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return None;
     }
     let _ = app.db.purge_sessions(now);
     app.db.audit(now, Some(user.id), None, action, detail);
-    (
-        [(header::SET_COOKIE, session_cookie(app, headers, &token))],
-        Redirect::to("/"),
-    )
-        .into_response()
+    Some(session_cookie(app, headers, &token))
+}
+
+fn start_session(app: &App, headers: &HeaderMap, user: &User, action: &str, detail: &str) -> Response {
+    match new_session(app, headers, user, action, detail) {
+        Some(cookie) => ([(header::SET_COOKIE, cookie)], Redirect::to("/")).into_response(),
+        None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 pub async fn logout(State(app): State<Shared>, headers: HeaderMap) -> Response {

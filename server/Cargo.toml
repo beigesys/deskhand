@@ -31,3 +31,7 @@ url = "2"
 cron = "0.17"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
+rust-embed = { version = "8", features = ["mime-guess"] }
+
+[dev-dependencies]
+ureq = { version = "3", default-features = false, features = ["json"] }

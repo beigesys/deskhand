@@ -405,6 +405,11 @@ impl Db {
         rows.collect()
     }
 
+    /// Unlinks a user's sign-in with `provider`; the number of identities removed.
+    pub fn unlink_identity(&self, user_id: i64, provider: &str) -> R<usize> {
+        self.c().execute("DELETE FROM user_identities WHERE user_id = ?1 AND provider = ?2", params![user_id, provider])
+    }
+
     // --- groups ---
 
     pub fn groups(&self) -> R<Vec<Group>> {
@@ -627,6 +632,36 @@ impl Db {
         if let Err(e) = r {
             log::error!("audit write failed: {e}");
         }
+    }
+
+    /// A page of the audit log, newest first: rows older than `before` (an audit id), with
+    /// the action starting with `action` and the user name / device / detail containing `q`.
+    pub fn audit_page(&self, before: Option<i64>, limit: i64, action: Option<&str>, q: Option<&str>) -> R<Vec<(i64, AuditRow)>> {
+        let c = self.c();
+        let mut s = c.prepare(
+            "SELECT a.id, a.ts, u.username, coalesce(d.name, a.device_id), a.action, a.detail FROM audit a
+             LEFT JOIN users u ON u.id = a.user_id LEFT JOIN devices d ON d.id = a.device_id
+             WHERE (?1 IS NULL OR a.id < ?1)
+               AND (?2 IS NULL OR a.action LIKE ?2 || '%')
+               AND (?3 IS NULL OR u.username LIKE '%' || ?3 || '%' OR d.name LIKE '%' || ?3 || '%'
+                    OR a.detail LIKE '%' || ?3 || '%')
+             ORDER BY a.id DESC LIMIT ?4",
+        )?;
+        let rows = s.query_map(params![before, action, q, limit], |r| {
+            Ok((
+                r.get(0)?,
+                AuditRow { ts: r.get(1)?, user: r.get(2)?, device: r.get(3)?, action: r.get(4)?, detail: r.get(5)? },
+            ))
+        })?;
+        rows.collect()
+    }
+
+    /// The distinct actions in the audit log, for the filter.
+    pub fn audit_actions(&self) -> R<Vec<String>> {
+        let c = self.c();
+        let mut s = c.prepare("SELECT DISTINCT action FROM audit ORDER BY action")?;
+        let rows = s.query_map([], |r| r.get(0))?;
+        rows.collect()
     }
 
     pub fn audit_rows(&self, limit: i64) -> R<Vec<AuditRow>> {

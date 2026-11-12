@@ -11,6 +11,7 @@
 //! - `DESKHAND_PUBLIC_URL`, `DESKHAND_ENTRA_*`, `DESKHAND_GOOGLE_*`, `DESKHAND_GITHUB_*`,
 //!   `DESKHAND_SSO_AUTO_PROVISION`, `DESKHAND_PASSWORD_LOGIN`: single sign-on (docs/sso.md)
 
+mod api;
 mod auth;
 mod db;
 mod inventory;
@@ -20,6 +21,7 @@ mod proxy;
 mod shell;
 mod sso;
 mod ui;
+mod web;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, Path, State};
@@ -64,6 +66,19 @@ pub struct App {
     next_conn: AtomicU64,
     /// Job output and status changes, for open job pages.
     pub job_events: tokio::sync::broadcast::Sender<jobs::Event>,
+    /// Devices coming and going, for live device lists (`/api/v1/events`).
+    pub device_events: tokio::sync::broadcast::Sender<DeviceEvent>,
+}
+
+/// A change to a device that open device lists should show.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DeviceEvent {
+    Online { id: String, since: i64 },
+    Offline { id: String, last_seen: i64 },
+    /// A new inventory: refetch the device.
+    Inventory { id: String },
+    Removed { id: String },
 }
 
 pub type Shared = Arc<App>;
@@ -137,15 +152,15 @@ async fn main() {
         pending: Mutex::default(),
         next_conn: AtomicU64::new(1),
         job_events: tokio::sync::broadcast::channel(1024).0,
+        device_events: tokio::sync::broadcast::channel(256).0,
     });
     tokio::spawn(jobs::scheduler(app.clone()));
-    let router = Router::new()
+    // The server-rendered pages, kept at /classic/ until the web app covers everything.
+    let classic = Router::new()
         .route("/", get(ui::devices))
         .route("/login", get(auth::login_page).post(auth::login))
         .route("/logout", post(auth::logout))
         .route("/setup", get(auth::setup_page).post(auth::setup))
-        .route("/auth/{provider}/start", get(auth::sso_start))
-        .route("/auth/{provider}/callback", get(auth::sso_callback))
         .route("/devices.csv", get(inventory::csv))
         .route("/devices/{id}", get(inventory::detail))
         .route("/devices/{id}/refresh", post(inventory::refresh))
@@ -170,6 +185,13 @@ async fn main() {
         .route("/jobs/{id}", get(jobs_ui::job))
         .route("/jobs/{id}/events", get(jobs_ui::events))
         .route("/jobs/{id}/{op}", post(jobs_ui::job_action))
+        .layer(axum::middleware::from_fn(web::classic_paths));
+    let router = Router::new()
+        .nest("/api/v1", api::router())
+        .nest("/classic", classic)
+        .route("/classic/", get(|| async { Redirect::permanent("/classic") }))
+        .route("/auth/{provider}/start", get(auth::sso_start))
+        .route("/auth/{provider}/callback", get(auth::sso_callback))
         .route("/api/enroll", post(enroll))
         .route("/agent/connect", get(agent_connect))
         .route("/agent/stream/{sid}", get(agent_stream))
@@ -178,6 +200,8 @@ async fn main() {
         .route("/d/{id}/shell/ws", get(shell::socket))
         .route("/d/{id}/", any(proxy::device))
         .route("/d/{id}/{*rest}", any(proxy::device))
+        // Everything else is the web app: its files, else its index.html for its routes.
+        .fallback(get(web::spa))
         .layer(axum::middleware::from_fn(auth::check_origin))
         .with_state(app);
     let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind");
@@ -255,6 +279,7 @@ async fn control(app: Shared, id: String, ip: String, ws: WebSocket) {
         .lock()
         .unwrap()
         .insert(id.clone(), Agent { voxl_token, since: now(), conn, tx });
+    let _ = app.device_events.send(DeviceEvent::Online { id: id.clone(), since: now() });
     // Runs that waited for this device to come online.
     jobs::dispatch(&app, &id);
     let mut ping = tokio::time::interval(Duration::from_secs(20));
@@ -274,6 +299,7 @@ async fn control(app: Shared, id: String, ip: String, ws: WebSocket) {
                         if let Err(e) = app.db.save_inventory(&id, &inventory, now()) {
                             log::error!("saving inventory for {id}: {e}");
                         }
+                        let _ = app.device_events.send(DeviceEvent::Inventory { id: id.clone() });
                     }
                     Ok(AgentMsg::JobOutput { run_id, stream, data }) => jobs::on_output(&app, &id, run_id, stream, data),
                     Ok(AgentMsg::JobResult { run_id, status, exit_code, stdout, stderr }) => {
@@ -299,6 +325,7 @@ async fn control(app: Shared, id: String, ip: String, ws: WebSocket) {
     if agents.get(&id).is_some_and(|a| a.conn == conn) {
         agents.remove(&id);
         log::info!("agent {id} disconnected");
+        let _ = app.device_events.send(DeviceEvent::Offline { id, last_seen: now() });
     }
 }
 
