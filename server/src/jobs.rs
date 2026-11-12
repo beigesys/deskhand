@@ -148,11 +148,11 @@ fn shell_of(s: Option<String>) -> ScriptShell {
     s.as_deref().and_then(ScriptShell::parse).unwrap_or(ScriptShell::Sh)
 }
 
-const JOB_COLS: &str = "j.id, j.name, j.script_id, j.shell, j.body, j.timeout_s, j.action, j.target_kind,
+pub(crate) const JOB_COLS: &str = "j.id, j.name, j.script_id, j.shell, j.body, j.timeout_s, j.action, j.target_kind,
     j.target_devices, j.target_group, j.schedule, j.next_fire, j.last_fired, j.expires_after, j.enabled,
     u.username, j.created_by, j.created";
 
-fn job_row(r: &Row) -> rusqlite::Result<Job> {
+pub(crate) fn job_row(r: &Row) -> rusqlite::Result<Job> {
     job_row_at(r, 0)
 }
 
@@ -194,10 +194,10 @@ fn job_row_at(r: &Row, o: usize) -> rusqlite::Result<Job> {
     })
 }
 
-const RUN_COLS: &str = "r.id, r.device_id, coalesce(d.name, r.device_id), r.via, r.status, r.exit_code,
+pub(crate) const RUN_COLS: &str = "r.id, r.device_id, coalesce(d.name, r.device_id), r.via, r.status, r.exit_code,
     r.stdout, r.stderr, r.queued, r.started, r.finished";
 
-fn run_row(r: &Row) -> rusqlite::Result<Run> {
+pub(crate) fn run_row(r: &Row) -> rusqlite::Result<Run> {
     Ok(Run {
         id: r.get(0)?,
         device_id: r.get(1)?,

@@ -5,7 +5,7 @@
 //! 404, 409 (conflict) or 500.
 
 use crate::auth::{self, base_url};
-use crate::db::{AuditRow, Device, Role, User};
+use crate::db::{AuditRow, Role, User};
 use crate::jobs::{self, Counts, Job, Run, Task};
 use crate::jobs_ui;
 use crate::{now, random_hex, send_to_agent, Shared};
@@ -31,6 +31,7 @@ pub fn router() -> Router<Shared> {
         .route("/me", get(me))
         .route("/events", get(events))
         .route("/devices", get(devices))
+        .route("/devices/summary", get(device_summary))
         .route("/devices.csv", get(crate::inventory::csv))
         .route("/devices/{id}", get(device).delete(delete_device))
         .route("/devices/{id}/rename", post(rename_device))
@@ -46,11 +47,13 @@ pub fn router() -> Router<Shared> {
         .route("/users/{id}/email", post(set_email))
         .route("/users/{id}/identities/{provider}", delete(unlink_identity))
         .route("/audit", get(audit))
+        .route("/audit/actions", get(audit_actions))
         .route("/scripts", get(scripts).post(add_script))
         .route("/scripts/{id}", get(script).put(update_script).delete(delete_script))
         .route("/jobs", get(jobs_list).post(add_job))
         .route("/jobs/{id}", get(job).delete(delete_job))
         .route("/jobs/{id}/events", get(jobs_ui::events))
+        .route("/jobs/{id}/runs", get(job_runs))
         .route("/jobs/{id}/{op}", post(job_op))
         .fallback(|| async { ApiError(StatusCode::NOT_FOUND, "no such API endpoint".into()) })
 }
@@ -99,6 +102,63 @@ fn need(app: &Shared, headers: &HeaderMap, min: Role) -> Result<User, ApiError> 
 
 fn ok() -> Json<serde_json::Value> {
     Json(json!({ "ok": true }))
+}
+
+// --- paging ---
+
+/// `?q=&cursor=&limit=&ids=` on every list endpoint.
+#[derive(Deserialize, Default)]
+struct ListQuery {
+    q: Option<String>,
+    cursor: Option<String>,
+    // Strings: `#[serde(flatten)]` hands query values over untyped.
+    limit: Option<String>,
+    /// Comma-separated ids: resolve a picker's selected values.
+    ids: Option<String>,
+}
+
+impl ListQuery {
+    fn q(&self) -> Option<&str> {
+        self.q.as_deref().map(str::trim).filter(|q| !q.is_empty())
+    }
+    fn limit(&self) -> i64 {
+        self.limit.as_deref().and_then(|l| l.parse().ok()).unwrap_or(25i64).clamp(1, 200)
+    }
+    /// The decoded cursor.
+    fn after<T: serde::de::DeserializeOwned>(&self) -> Option<T> {
+        let raw = base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, self.cursor.as_deref()?).ok()?;
+        serde_json::from_slice(&raw).ok()
+    }
+    /// `ids` as a JSON array of strings or numbers, for `json_each`.
+    fn ids_json(&self, numeric: bool) -> Option<String> {
+        let ids: Vec<&str> = self.ids.as_deref()?.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+        Some(if numeric {
+            serde_json::to_string(&ids.iter().filter_map(|i| i.parse::<i64>().ok()).collect::<Vec<_>>()).unwrap()
+        } else {
+            serde_json::to_string(&ids).unwrap()
+        })
+    }
+}
+
+fn cursor_of<T: Serialize>(v: &T) -> String {
+    base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, serde_json::to_vec(v).unwrap())
+}
+
+/// One page of a list: `next_cursor` is absent on the last page.
+#[derive(Serialize)]
+pub struct Page<T> {
+    items: Vec<T>,
+    next_cursor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total: Option<i64>,
+}
+
+/// Trims a `limit + 1` fetch to `limit` and makes the cursor from the last item kept.
+fn page<T, C: Serialize>(mut rows: Vec<T>, limit: i64, key: impl Fn(&T) -> C) -> (Vec<T>, Option<String>) {
+    let more = rows.len() as i64 > limit;
+    rows.truncate(limit as usize);
+    let next = if more { rows.last().map(|r| cursor_of(&key(r))) } else { None };
+    (rows, next)
 }
 
 // --- signing in ---
@@ -256,55 +316,31 @@ pub struct DeviceOut {
     attention: Vec<&'static str>,
 }
 
-/// The first non-loopback IPv4 address on a real interface.
-fn lan_ip(inv: &Inventory) -> Option<String> {
-    inv.network
-        .iter()
-        .filter(|n| !["lo", "docker", "veth", "br-", "virbr", "vEthernet"].iter().any(|p| n.name.starts_with(p)))
-        .flat_map(|n| n.ips.iter())
-        .map(|ip| ip.split('/').next().unwrap_or(ip))
-        .find(|ip| ip.contains('.') && !ip.starts_with("127.") && !ip.starts_with("169.254."))
-        .map(str::to_owned)
-}
-
-fn attention(inv: Option<&Inventory>, online: bool, last_seen: i64, now: i64) -> Vec<&'static str> {
-    let mut a = vec![];
-    if let Some(inv) = inv {
-        if inv.security.pending_reboot == Some(true) {
-            a.push("reboot_pending");
-        }
-        if inv.security.firewall.iter().any(|f| f.enabled == Some(false)) {
-            a.push("firewall_off");
-        }
-        if inv.disks.iter().any(|d| d.total > (1 << 30) && (d.free as f64) < d.total as f64 * 0.1) {
-            a.push("low_disk");
-        }
-        if inv.security.antivirus.as_ref().is_some_and(|av| av.enabled == Some(false)) {
-            a.push("av_off");
-        }
-    }
-    if !online && now - last_seen > 7 * 86400 {
+fn attention(flags: &str, online: bool, last_seen: i64, now: i64) -> Vec<&'static str> {
+    const ALL: [&str; 4] = ["reboot_pending", "firewall_off", "low_disk", "av_off"];
+    let mut a: Vec<&'static str> = ALL.into_iter().filter(|f| flags.split(',').any(|x| x == *f)).collect();
+    if !online && now - last_seen > OFFLINE_ATTENTION {
         a.push("offline_7d");
     }
     a
 }
 
-fn device_out(d: Device, inv: Option<&Inventory>, since: Option<i64>, now: i64) -> DeviceOut {
+/// Offline this long, a device needs a look.
+const OFFLINE_ATTENTION: i64 = 7 * 86400;
+
+fn device_out(d: crate::db::DeviceRow, since: Option<i64>, now: i64) -> DeviceOut {
     let os = match (&d.inv_os, &d.inv_os_version) {
         (Some(n), Some(v)) => format!("{n} {v}"),
         (Some(n), None) => n.clone(),
         _ => d.os.clone(),
     };
     DeviceOut {
-        attention: attention(inv, since.is_some(), d.last_seen, now),
-        ip: inv.and_then(lan_ip),
-        public_ip: inv.and_then(|i| i.public_ip.clone()),
-        serial: inv.and_then(|i| i.hardware.serial.clone()),
-        model: inv.and_then(|i| match (&i.hardware.manufacturer, &i.hardware.model) {
-            (Some(m), Some(n)) => Some(format!("{m} {n}")),
-            (m, n) => m.clone().or(n.clone()),
-        }),
-        logged_in_users: inv.map(|i| i.logged_in_users.clone()).unwrap_or_default(),
+        attention: attention(&d.attention, since.is_some(), d.last_seen, now),
+        logged_in_users: d.users.split(", ").filter(|u| !u.is_empty()).map(str::to_owned).collect(),
+        ip: d.ip,
+        public_ip: d.public_ip,
+        serial: d.serial,
+        model: d.model,
         id: d.id,
         name: d.name,
         hostname: d.hostname,
@@ -323,44 +359,98 @@ fn online_map(app: &Shared) -> HashMap<String, i64> {
     app.agents.lock().unwrap().iter().map(|(id, a)| (id.clone(), a.since)).collect()
 }
 
-#[derive(Deserialize)]
-struct DeviceQuery {
-    group: Option<i64>,
-    q: Option<String>,
-    status: Option<String>,
+fn online_json(online: &HashMap<String, i64>) -> String {
+    serde_json::to_string(&online.keys().collect::<Vec<_>>()).unwrap()
 }
 
-async fn devices(State(app): State<Shared>, headers: HeaderMap, Query(f): Query<DeviceQuery>) -> Api<Vec<DeviceOut>> {
+#[derive(Deserialize)]
+struct DeviceListQuery {
+    #[serde(flatten)]
+    list: ListQuery,
+    /// A group id, or `none`.
+    group: Option<String>,
+    /// `online`, `offline`, `attention`.
+    status: Option<String>,
+    /// `linux`, `windows`, `macos`.
+    os: Option<String>,
+}
+
+/// `GET /api/v1/devices`: a page in name order, searched and filtered in SQL.
+async fn devices(State(app): State<Shared>, headers: HeaderMap, Query(f): Query<DeviceListQuery>) -> Api<Page<DeviceOut>> {
     need(&app, &headers, Role::Viewer)?;
-    let invs = app.db.latest_inventories()?;
     let online = online_map(&app);
     let now = now();
-    let q = f.q.as_deref().map(str::to_lowercase).filter(|q| !q.is_empty());
-    let out = app
-        .db
-        .devices(f.group)?
+    let limit = f.list.limit();
+    let ids = f.list.ids_json(false);
+    let on = online_json(&online);
+    let mut q = crate::db::DeviceQuery {
+        q: f.list.q(),
+        group: match f.group.as_deref() {
+            None | Some("") => None,
+            Some("none") => Some(None),
+            Some(g) => Some(Some(g.parse().map_err(|_| bad("group is an id or none"))?)),
+        },
+        platform: f.os.as_deref().filter(|o| !o.is_empty()),
+        only: ids,
+        after: f.list.after::<(String, String)>(),
+        limit: limit + 1,
+        ..Default::default()
+    };
+    match f.status.as_deref() {
+        Some("online") => q.only = Some(match q.only.take() {
+            // Both a selection and online: the selection's online ones.
+            Some(sel) => {
+                let sel: Vec<String> = serde_json::from_str(&sel).unwrap_or_default();
+                serde_json::to_string(&sel.into_iter().filter(|i| online.contains_key(i)).collect::<Vec<_>>()).unwrap()
+            }
+            None => on.clone(),
+        }),
+        Some("offline") => q.except = Some(on.clone()),
+        Some("attention") => q.attention = Some((on.clone(), now - OFFLINE_ATTENTION)),
+        _ => {}
+    }
+    let (rows, total) = app.db.device_page(&q)?;
+    let (rows, next) = page(rows, limit, |d| (d.name.clone(), d.id.clone()));
+    let items = rows
         .into_iter()
         .map(|d| {
-            let inv = invs.get(&d.id);
             let since = online.get(&d.id).copied();
-            device_out(d, inv, since, now)
-        })
-        .filter(|d| match f.status.as_deref() {
-            Some("online") => d.online,
-            Some("offline") => !d.online,
-            Some("attention") => !d.attention.is_empty(),
-            _ => true,
-        })
-        .filter(|d| {
-            q.as_deref().is_none_or(|q| {
-                [Some(&d.name), Some(&d.hostname), Some(&d.os), d.ip.as_ref(), d.serial.as_ref(), d.group.as_ref()]
-                    .into_iter()
-                    .flatten()
-                    .any(|s| s.to_lowercase().contains(q))
-            })
+            device_out(d, since, now)
         })
         .collect();
-    Ok(Json(out))
+    Ok(Json(Page { items, next_cursor: next, total: Some(total) }))
+}
+
+#[derive(Serialize)]
+struct Summary {
+    total: i64,
+    online: i64,
+    attention: i64,
+    /// The first few that need attention, for the overview.
+    attention_devices: Vec<DeviceOut>,
+}
+
+/// `GET /api/v1/devices/summary`: fleet counts for the overview tiles and the sidebar.
+async fn device_summary(State(app): State<Shared>, headers: HeaderMap) -> Api<Summary> {
+    need(&app, &headers, Role::Viewer)?;
+    let online = online_map(&app);
+    let on = online_json(&online);
+    let now = now();
+    let (_, total) = app.db.device_page(&crate::db::DeviceQuery { limit: 0, ..Default::default() })?;
+    let (_, online_n) = app.db.device_page(&crate::db::DeviceQuery { only: Some(on.clone()), limit: 0, ..Default::default() })?;
+    let (rows, attention) = app.db.device_page(&crate::db::DeviceQuery {
+        attention: Some((on, now - OFFLINE_ATTENTION)),
+        limit: 12,
+        ..Default::default()
+    })?;
+    let attention_devices = rows
+        .into_iter()
+        .map(|d| {
+            let since = online.get(&d.id).copied();
+            device_out(d, since, now)
+        })
+        .collect();
+    Ok(Json(Summary { total, online: online_n, attention, attention_devices }))
 }
 
 #[derive(Serialize)]
@@ -381,7 +471,9 @@ struct DeviceRun {
 
 async fn device(State(app): State<Shared>, headers: HeaderMap, Path(id): Path<String>) -> Api<DeviceDetail> {
     need(&app, &headers, Role::Viewer)?;
-    let d = app.db.device(&id)?.ok_or_else(|| err(StatusCode::NOT_FOUND, "no such device"))?;
+    let ids = serde_json::to_string(&[&id]).unwrap();
+    let (mut rows, _) = app.db.device_page(&crate::db::DeviceQuery { only: Some(ids), limit: 1, ..Default::default() })?;
+    let d = rows.pop().ok_or_else(|| err(StatusCode::NOT_FOUND, "no such device"))?;
     let inv = app.db.inventory(&id)?;
     let since = online_map(&app).get(&id).copied();
     let runs = app
@@ -391,7 +483,7 @@ async fn device(State(app): State<Shared>, headers: HeaderMap, Path(id): Path<St
         .map(|(r, job_id, job_name)| DeviceRun { job_id, job_name, run: run_out(r) })
         .collect();
     Ok(Json(DeviceDetail {
-        device: device_out(d, inv.as_ref().map(|(_, i)| i), since, now()),
+        device: device_out(d, since, now()),
         inventory_at: inv.as_ref().map(|(t, _)| *t),
         inventory: inv.map(|(_, i)| i),
         runs,
@@ -494,9 +586,13 @@ struct GroupOut {
     devices: i64,
 }
 
-async fn groups(State(app): State<Shared>, headers: HeaderMap) -> Api<Vec<GroupOut>> {
+async fn groups(State(app): State<Shared>, headers: HeaderMap, Query(f): Query<ListQuery>) -> Api<Page<GroupOut>> {
     need(&app, &headers, Role::Viewer)?;
-    Ok(Json(app.db.groups()?.into_iter().map(|g| GroupOut { id: g.id, name: g.name, devices: g.devices }).collect()))
+    let limit = f.limit();
+    let rows = app.db.groups_page(f.q(), f.ids_json(true).as_deref(), f.after(), limit + 1)?;
+    let (rows, next) = page(rows, limit, |g| (g.name.clone(), g.id));
+    let items = rows.into_iter().map(|g| GroupOut { id: g.id, name: g.name, devices: g.devices }).collect();
+    Ok(Json(Page { items, next_cursor: next, total: None }))
 }
 
 async fn add_group(State(app): State<Shared>, headers: HeaderMap, Json(b): Json<NameBody>) -> Api<serde_json::Value> {
@@ -536,15 +632,24 @@ struct TokenOut {
     uses: i64,
 }
 
-async fn enroll_tokens(State(app): State<Shared>, headers: HeaderMap) -> Api<Vec<TokenOut>> {
+/// Active tokens only: they expire, so there are never many. Still a page.
+async fn enroll_tokens(State(app): State<Shared>, headers: HeaderMap, Query(f): Query<ListQuery>) -> Api<Page<TokenOut>> {
     need(&app, &headers, Role::Admin)?;
-    Ok(Json(
-        app.db
-            .enroll_tokens(now())?
-            .into_iter()
-            .map(|t| TokenOut { id: t.id, group: t.group, expires: t.expires, max_uses: t.max_uses, uses: t.uses })
-            .collect(),
-    ))
+    let q = f.q().map(str::to_lowercase);
+    let before: Option<i64> = f.after();
+    let rows: Vec<TokenOut> = app
+        .db
+        .enroll_tokens(now())?
+        .into_iter()
+        .filter(|t| before.is_none_or(|b| t.id < b))
+        .filter(|t| q.as_deref().is_none_or(|q| t.group.as_deref().unwrap_or("no group").to_lowercase().contains(q)))
+        .map(|t| TokenOut { id: t.id, group: t.group, expires: t.expires, max_uses: t.max_uses, uses: t.uses })
+        .collect();
+    let mut rows = rows;
+    rows.sort_by(|a, b| b.id.cmp(&a.id));
+    rows.truncate(f.limit() as usize + 1);
+    let (items, next) = page(rows, f.limit(), |t| t.id);
+    Ok(Json(Page { items, next_cursor: next, total: None }))
 }
 
 #[derive(Deserialize)]
@@ -624,24 +729,26 @@ struct IdentityOut {
 
 #[derive(Serialize)]
 struct UsersOut {
-    users: Vec<UserOut>,
+    items: Vec<UserOut>,
+    next_cursor: Option<String>,
     sso_enabled: bool,
 }
 
-async fn users(State(app): State<Shared>, headers: HeaderMap) -> Api<UsersOut> {
+async fn users(State(app): State<Shared>, headers: HeaderMap, Query(f): Query<ListQuery>) -> Api<UsersOut> {
     need(&app, &headers, Role::Admin)?;
-    let emails = app.db.user_emails()?;
+    let limit = f.limit();
+    let rows = app.db.users_page(f.q(), f.ids_json(true).as_deref(), f.after(), limit + 1)?;
+    let (rows, next) = page(rows, limit, |(u, _, _)| (u.username.clone(), u.id));
+    let page_ids = serde_json::to_string(&rows.iter().map(|(u, _, _)| u.id).collect::<Vec<_>>()).unwrap();
     let mut ids: HashMap<i64, Vec<IdentityOut>> = HashMap::new();
-    for (uid, provider, email) in app.db.identities()? {
+    for (uid, provider, email) in app.db.identities_of(&page_ids)? {
         let label = crate::sso::Kind::parse(&provider).map_or(provider.clone(), |k| k.label().to_owned());
         ids.entry(uid).or_default().push(IdentityOut { provider, label, email });
     }
-    let users = app
-        .db
-        .users()?
+    let items = rows
         .into_iter()
-        .map(|(u, created)| UserOut {
-            email: emails.get(&u.id).cloned(),
+        .map(|(u, created, email)| UserOut {
+            email,
             identities: ids.remove(&u.id).unwrap_or_default(),
             id: u.id,
             username: u.username,
@@ -649,7 +756,7 @@ async fn users(State(app): State<Shared>, headers: HeaderMap) -> Api<UsersOut> {
             created,
         })
         .collect();
-    Ok(Json(UsersOut { users, sso_enabled: !app.sso.providers.is_empty() }))
+    Ok(Json(UsersOut { items, next_cursor: next, sso_enabled: !app.sso.providers.is_empty() }))
 }
 
 fn parse_email(s: Option<&str>) -> Result<Option<String>, ApiError> {
@@ -787,18 +894,11 @@ async fn unlink_identity(
 
 #[derive(Deserialize)]
 struct AuditQuery {
-    before: Option<i64>,
-    limit: Option<i64>,
+    #[serde(flatten)]
+    list: ListQuery,
     action: Option<String>,
-    q: Option<String>,
-}
-
-#[derive(Serialize)]
-struct AuditOut {
-    rows: Vec<AuditRowOut>,
-    /// Pass as `before` for the next page; absent on the last.
-    next: Option<i64>,
-    actions: Vec<String>,
+    user: Option<String>,
+    device: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -811,18 +911,35 @@ struct AuditRowOut {
     detail: String,
 }
 
-async fn audit(State(app): State<Shared>, headers: HeaderMap, Query(q): Query<AuditQuery>) -> Api<AuditOut> {
+async fn audit(State(app): State<Shared>, headers: HeaderMap, Query(q): Query<AuditQuery>) -> Api<Page<AuditRowOut>> {
     need(&app, &headers, Role::Admin)?;
-    let limit = q.limit.unwrap_or(100).clamp(1, 500);
+    let limit = q.list.limit();
     let action = q.action.as_deref().filter(|s| !s.is_empty());
-    let text = q.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let page = app.db.audit_page(q.before, limit, action, text)?;
-    let next = (page.len() as i64 == limit).then(|| page.last().map(|(id, _)| *id)).flatten();
-    let rows = page
+    let device = q.device.as_deref().filter(|s| !s.is_empty());
+    let user = q.user.as_deref().and_then(|u| u.parse().ok());
+    let rows = app.db.audit_page(q.list.after(), limit + 1, action, q.list.q(), user, device)?;
+    let (rows, next) = page(rows, limit, |(id, _)| *id);
+    let items = rows
         .into_iter()
         .map(|(id, AuditRow { ts, user, device, action, detail })| AuditRowOut { id, ts, user, device, action, detail })
         .collect();
-    Ok(Json(AuditOut { rows, next, actions: app.db.audit_actions()? }))
+    Ok(Json(Page { items, next_cursor: next, total: None }))
+}
+
+#[derive(Serialize)]
+struct ActionOut {
+    id: String,
+    name: String,
+}
+
+/// `GET /api/v1/audit/actions`: the distinct actions, for the audit filter.
+async fn audit_actions(State(app): State<Shared>, headers: HeaderMap, Query(f): Query<ListQuery>) -> Api<Page<ActionOut>> {
+    need(&app, &headers, Role::Admin)?;
+    let limit = f.limit();
+    let after: Option<String> = f.after();
+    let rows = app.db.audit_actions_page(f.q(), after.as_deref(), limit + 1)?;
+    let (rows, next) = page(rows, limit, |a| a.clone());
+    Ok(Json(Page { items: rows.into_iter().map(|a| ActionOut { id: a.clone(), name: a }).collect(), next_cursor: next, total: None }))
 }
 
 // --- scripts ---
@@ -851,9 +968,12 @@ fn script_out(s: jobs::Script, with_body: bool) -> ScriptOut {
     }
 }
 
-async fn scripts(State(app): State<Shared>, headers: HeaderMap) -> Api<Vec<ScriptOut>> {
+async fn scripts(State(app): State<Shared>, headers: HeaderMap, Query(f): Query<ListQuery>) -> Api<Page<ScriptOut>> {
     need(&app, &headers, Role::Viewer)?;
-    Ok(Json(app.db.scripts()?.into_iter().map(|s| script_out(s, false)).collect()))
+    let limit = f.limit();
+    let rows = app.db.scripts_page(f.q(), f.ids_json(true).as_deref(), f.after(), limit + 1)?;
+    let (rows, next) = page(rows, limit, |s| (s.name.clone(), s.id));
+    Ok(Json(Page { items: rows.into_iter().map(|s| script_out(s, false)).collect(), next_cursor: next, total: None }))
 }
 
 async fn script(State(app): State<Shared>, headers: HeaderMap, Path(id): Path<i64>) -> Api<ScriptOut> {
@@ -1009,23 +1129,48 @@ fn job_out(app: &Shared, j: Job, counts: Option<Counts>) -> JobOut {
     }
 }
 
-async fn jobs_list(State(app): State<Shared>, headers: HeaderMap) -> Api<Vec<JobOut>> {
+async fn jobs_list(State(app): State<Shared>, headers: HeaderMap, Query(f): Query<ListQuery>) -> Api<Page<JobOut>> {
     need(&app, &headers, Role::Viewer)?;
-    let jobs = app.db.jobs()?;
-    Ok(Json(jobs.into_iter().map(|(j, c)| job_out(&app, j, Some(c))).collect()))
+    let limit = f.limit();
+    let rows = app.db.jobs_page(f.q(), f.ids_json(true).as_deref(), f.after(), limit + 1)?;
+    let (rows, next) = page(rows, limit, |(j, _)| j.id);
+    Ok(Json(Page { items: rows.into_iter().map(|(j, c)| job_out(&app, j, Some(c))).collect(), next_cursor: next, total: None }))
 }
 
 #[derive(Serialize)]
 struct JobDetail {
     job: JobOut,
-    runs: Vec<RunOut>,
+    /// Runs by status, over all of the job's runs.
+    counts: HashMap<String, i64>,
 }
 
 async fn job(State(app): State<Shared>, headers: HeaderMap, Path(id): Path<i64>) -> Api<JobDetail> {
     need(&app, &headers, Role::Viewer)?;
     let j = app.db.job(id)?.ok_or_else(|| err(StatusCode::NOT_FOUND, "no such job"))?;
-    let runs = app.db.runs(id)?.into_iter().map(run_out).collect();
-    Ok(Json(JobDetail { job: job_out(&app, j, None), runs }))
+    let counts = app.db.run_counts(id)?.into_iter().collect();
+    Ok(Json(JobDetail { job: job_out(&app, j, None), counts }))
+}
+
+#[derive(Deserialize)]
+struct RunsQuery {
+    #[serde(flatten)]
+    list: ListQuery,
+    status: Option<String>,
+}
+
+/// `GET /api/v1/jobs/{id}/runs`: newest first, by device name search and status.
+async fn job_runs(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Query(f): Query<RunsQuery>,
+) -> Api<Page<RunOut>> {
+    need(&app, &headers, Role::Viewer)?;
+    let limit = f.list.limit();
+    let status = f.status.as_deref().filter(|s| !s.is_empty());
+    let rows = app.db.runs_page(id, status, f.list.q(), f.list.after(), limit + 1)?;
+    let (rows, next) = page(rows, limit, |r| r.id);
+    Ok(Json(Page { items: rows.into_iter().map(run_out).collect(), next_cursor: next, total: None }))
 }
 
 /// `POST /api/v1/jobs`. Exactly one of `script_id` / `action`, and one of `devices` /

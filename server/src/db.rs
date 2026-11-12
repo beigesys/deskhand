@@ -136,7 +136,92 @@ CREATE TABLE job_runs (
 CREATE INDEX job_runs_job ON job_runs(job_id);
 CREATE INDEX job_runs_device ON job_runs(device_id, status);
 CREATE INDEX job_runs_status ON job_runs(status);
+"#, r#"
+-- Searchable, sortable summary columns, so device lists page in SQL.
+ALTER TABLE devices ADD COLUMN inv_ip TEXT;
+ALTER TABLE devices ADD COLUMN inv_public_ip TEXT;
+ALTER TABLE devices ADD COLUMN inv_model TEXT;
+ALTER TABLE devices ADD COLUMN inv_users TEXT NOT NULL DEFAULT '';
+ALTER TABLE devices ADD COLUMN attention TEXT NOT NULL DEFAULT '';
+CREATE INDEX devices_name ON devices(name COLLATE NOCASE, id);
+CREATE INDEX devices_group ON devices(group_id);
+CREATE INDEX devices_last_seen ON devices(last_seen);
+CREATE INDEX audit_action ON audit(action, id);
+CREATE INDEX audit_user ON audit(user_id, id);
+CREATE INDEX audit_device ON audit(device_id, id);
+CREATE INDEX job_runs_job_id ON job_runs(job_id, id);
 "#];
+
+/// The first private IPv4 address on a real interface (not loopback, Docker or a bridge).
+pub fn lan_ip(inv: &deskhand_proto::Inventory) -> Option<String> {
+    inv.network
+        .iter()
+        .filter(|n| !["lo", "docker", "veth", "br-", "virbr", "vEthernet"].iter().any(|p| n.name.starts_with(p)))
+        .flat_map(|n| n.ips.iter())
+        .map(|ip| ip.split('/').next().unwrap_or(ip))
+        .find(|ip| ip.contains('.') && !ip.starts_with("127.") && !ip.starts_with("169.254."))
+        .map(str::to_owned)
+}
+
+/// Why an inventory says the device needs a look: `reboot_pending`, `firewall_off`,
+/// `low_disk` (any disk over 1 GiB with under 10% free), `av_off`.
+pub fn inventory_attention(inv: &deskhand_proto::Inventory) -> Vec<&'static str> {
+    let mut a = vec![];
+    if inv.security.pending_reboot == Some(true) {
+        a.push("reboot_pending");
+    }
+    if inv.security.firewall.iter().any(|f| f.enabled == Some(false)) {
+        a.push("firewall_off");
+    }
+    if inv.disks.iter().any(|d| d.total > (1 << 30) && (d.free as f64) < d.total as f64 * 0.1) {
+        a.push("low_disk");
+    }
+    if inv.security.antivirus.as_ref().is_some_and(|av| av.enabled == Some(false)) {
+        a.push("av_off");
+    }
+    a
+}
+
+/// A device as lists show it.
+pub struct DeviceRow {
+    pub id: String,
+    pub name: String,
+    pub hostname: String,
+    pub os: String,
+    pub group_id: Option<i64>,
+    pub group: Option<String>,
+    pub last_seen: i64,
+    pub inv_os: Option<String>,
+    pub inv_os_version: Option<String>,
+    pub inv_last_boot: Option<i64>,
+    pub ip: Option<String>,
+    pub public_ip: Option<String>,
+    pub serial: Option<String>,
+    pub model: Option<String>,
+    pub users: String,
+    /// Comma-separated inventory flags.
+    pub attention: String,
+}
+
+/// What a device list asks for.
+#[derive(Default)]
+pub struct DeviceQuery<'a> {
+    /// Case-insensitive substring of name, hostname, IP, public IP, serial, OS, model, users.
+    pub q: Option<&'a str>,
+    /// `Some(None)`: devices in no group.
+    pub group: Option<Option<i64>>,
+    /// `linux`, `windows`, `macos`.
+    pub platform: Option<&'a str>,
+    /// Only these ids (JSON array), e.g. the online ones or a picker's selection.
+    pub only: Option<String>,
+    /// Not these ids (JSON array).
+    pub except: Option<String>,
+    /// Inventory flags, or offline (not in `online`) for 7 days before `now`.
+    pub attention: Option<(String, i64)>,
+    /// After this (name, id) in name order.
+    pub after: Option<(String, String)>,
+    pub limit: i64,
+}
 
 /// Inventory snapshots kept per device.
 const INVENTORY_HISTORY: i64 = 30;
@@ -468,6 +553,71 @@ impl Db {
         Ok(self.devices(None)?.into_iter().find(|d| d.id == id))
     }
 
+    /// A page of devices in name order, and how many match in all.
+    pub fn device_page(&self, f: &DeviceQuery) -> R<(Vec<DeviceRow>, i64)> {
+        let like = f.q.map(|q| format!("%{}%", q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")));
+        let (group_set, group) = match f.group {
+            None => (0, None),
+            Some(g) => (1, g),
+        };
+        let (att, att_online, att_before) = match &f.attention {
+            Some((online, before)) => (1, Some(online.as_str()), *before),
+            None => (0, None, 0),
+        };
+        let filter = "
+             (?1 IS NULL OR d.name LIKE ?1 ESCAPE '\\' OR d.hostname LIKE ?1 ESCAPE '\\' OR d.inv_ip LIKE ?1 ESCAPE '\\'
+              OR d.inv_public_ip LIKE ?1 ESCAPE '\\' OR d.inv_serial LIKE ?1 ESCAPE '\\' OR d.inv_os LIKE ?1 ESCAPE '\\'
+              OR d.inv_model LIKE ?1 ESCAPE '\\' OR d.inv_users LIKE ?1 ESCAPE '\\' OR g.name LIKE ?1 ESCAPE '\\')
+             AND (?2 = 0 OR d.group_id IS ?3)
+             AND (?4 IS NULL OR d.os = ?4)
+             AND (?5 IS NULL OR d.id IN (SELECT value FROM json_each(?5)))
+             AND (?6 IS NULL OR d.id NOT IN (SELECT value FROM json_each(?6)))
+             AND (?7 = 0 OR d.attention != ''
+                  OR (d.last_seen < ?9 AND d.id NOT IN (SELECT value FROM json_each(?8))))";
+        let c = self.c();
+        let total: i64 = c.query_row(
+            &format!("SELECT count(*) FROM devices d LEFT JOIN groups g ON g.id = d.group_id WHERE {filter}"),
+            params![like, group_set, group, f.platform, f.only, f.except, att, att_online, att_before],
+            |r| r.get(0),
+        )?;
+        let (after_name, after_id) = match &f.after {
+            Some((n, i)) => (Some(n.as_str()), Some(i.as_str())),
+            None => (None, None),
+        };
+        let mut s = c.prepare(&format!(
+            "SELECT d.id, d.name, d.hostname, d.os, d.group_id, g.name, d.last_seen, d.inv_os, d.inv_os_version,
+                    d.inv_last_boot, d.inv_ip, d.inv_public_ip, d.inv_serial, d.inv_model, d.inv_users, d.attention
+             FROM devices d LEFT JOIN groups g ON g.id = d.group_id
+             WHERE {filter}
+               AND (?10 IS NULL OR d.name > ?10 COLLATE NOCASE OR (d.name = ?10 COLLATE NOCASE AND d.id > ?11))
+             ORDER BY d.name COLLATE NOCASE, d.id LIMIT ?12"
+        ))?;
+        let rows = s.query_map(
+            params![like, group_set, group, f.platform, f.only, f.except, att, att_online, att_before, after_name, after_id, f.limit],
+            |r| {
+                Ok(DeviceRow {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    hostname: r.get(2)?,
+                    os: r.get(3)?,
+                    group_id: r.get(4)?,
+                    group: r.get(5)?,
+                    last_seen: r.get(6)?,
+                    inv_os: r.get(7)?,
+                    inv_os_version: r.get(8)?,
+                    inv_last_boot: r.get(9)?,
+                    ip: r.get(10)?,
+                    public_ip: r.get(11)?,
+                    serial: r.get(12)?,
+                    model: r.get(13)?,
+                    users: r.get(14)?,
+                    attention: r.get(15)?,
+                })
+            },
+        )?;
+        Ok((rows.collect::<R<Vec<_>>>()?, total))
+    }
+
     // --- inventory ---
 
     /// Saves a snapshot, updates the device's summary columns and keeps the newest
@@ -479,7 +629,8 @@ impl Db {
         tx.execute("INSERT INTO inventory (device_id, ts, json) VALUES (?1, ?2, ?3)", params![device, now, json])?;
         tx.execute(
             "UPDATE devices SET inv_os = ?2, inv_os_version = ?3, inv_serial = ?4, inv_ram = ?5,
-                    inv_last_boot = ?6, inv_at = ?7 WHERE id = ?1",
+                    inv_last_boot = ?6, inv_at = ?7, inv_ip = ?8, inv_public_ip = ?9, inv_model = ?10,
+                    inv_users = ?11, attention = ?12 WHERE id = ?1",
             params![
                 device,
                 inv.os.name,
@@ -487,7 +638,15 @@ impl Db {
                 inv.hardware.serial,
                 inv.memory.total.map(|n| n as i64),
                 inv.last_boot,
-                now
+                now,
+                lan_ip(inv),
+                inv.public_ip,
+                match (&inv.hardware.manufacturer, &inv.hardware.model) {
+                    (Some(m), Some(n)) => Some(format!("{m} {n}")),
+                    (m, n) => m.clone().or(n.clone()),
+                },
+                inv.logged_in_users.join(", "),
+                inventory_attention(inv).join(","),
             ],
         )?;
         tx.execute(
@@ -636,18 +795,28 @@ impl Db {
 
     /// A page of the audit log, newest first: rows older than `before` (an audit id), with
     /// the action starting with `action` and the user name / device / detail containing `q`.
-    pub fn audit_page(&self, before: Option<i64>, limit: i64, action: Option<&str>, q: Option<&str>) -> R<Vec<(i64, AuditRow)>> {
+    pub fn audit_page(
+        &self,
+        before: Option<i64>,
+        limit: i64,
+        action: Option<&str>,
+        q: Option<&str>,
+        user: Option<i64>,
+        device: Option<&str>,
+    ) -> R<Vec<(i64, AuditRow)>> {
         let c = self.c();
         let mut s = c.prepare(
             "SELECT a.id, a.ts, u.username, coalesce(d.name, a.device_id), a.action, a.detail FROM audit a
              LEFT JOIN users u ON u.id = a.user_id LEFT JOIN devices d ON d.id = a.device_id
              WHERE (?1 IS NULL OR a.id < ?1)
-               AND (?2 IS NULL OR a.action LIKE ?2 || '%')
+               AND (?2 IS NULL OR a.action = ?2)
+               AND (?5 IS NULL OR a.user_id = ?5)
+               AND (?6 IS NULL OR a.device_id = ?6)
                AND (?3 IS NULL OR u.username LIKE '%' || ?3 || '%' OR d.name LIKE '%' || ?3 || '%'
                     OR a.detail LIKE '%' || ?3 || '%')
              ORDER BY a.id DESC LIMIT ?4",
         )?;
-        let rows = s.query_map(params![before, action, q, limit], |r| {
+        let rows = s.query_map(params![before, action, q, limit, user, device], |r| {
             Ok((
                 r.get(0)?,
                 AuditRow { ts: r.get(1)?, user: r.get(2)?, device: r.get(3)?, action: r.get(4)?, detail: r.get(5)? },

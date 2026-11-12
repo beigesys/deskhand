@@ -14,6 +14,7 @@
 mod api;
 mod auth;
 mod db;
+mod db_pages;
 mod inventory;
 mod jobs;
 mod jobs_ui;

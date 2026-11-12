@@ -148,13 +148,13 @@ fn api_v1() {
     assert_eq!(admin.post("/api/v1/groups", json!({ "name": "  " })).0, 400);
     let (st, groups) = admin.get("/api/v1/groups");
     assert_eq!(st, 200);
-    assert_eq!(groups[0]["name"], "Office");
+    assert_eq!(groups["items"][0]["name"], "Office");
     let (st, tok) = admin.post("/api/v1/enroll-tokens", json!({ "group_id": gid, "hours": 24, "max_uses": 3 }));
     assert_eq!(st, 200);
     assert_eq!(tok["token"].as_str().unwrap().len(), 40);
     assert!(tok["linux"].as_str().unwrap().contains("--token"));
     let (_, tokens) = admin.get("/api/v1/enroll-tokens");
-    assert_eq!(tokens.as_array().unwrap().len(), 1);
+    assert_eq!(tokens["items"].as_array().unwrap().len(), 1);
 
     // Enroll a device with it (the agent's own endpoint), then see it listed.
     let (st, enrolled) = anon.post("/api/enroll", json!({ "token": tok["token"], "hostname": "test-host", "os": "linux" }));
@@ -162,11 +162,19 @@ fn api_v1() {
     let dev = enrolled["device_id"].as_str().unwrap().to_owned();
     let (st, devices) = admin.get("/api/v1/devices");
     assert_eq!(st, 200);
-    assert_eq!(devices[0]["hostname"], "test-host");
-    assert_eq!(devices[0]["online"], false);
-    assert_eq!(devices[0]["group"], "Office");
-    assert_eq!(admin.get("/api/v1/devices?q=nomatch").1.as_array().unwrap().len(), 0);
-    assert_eq!(admin.get("/api/v1/devices?status=online").1.as_array().unwrap().len(), 0);
+    assert_eq!(devices["items"][0]["hostname"], "test-host");
+    assert_eq!(devices["items"][0]["online"], false);
+    assert_eq!(devices["items"][0]["group"], "Office");
+    assert_eq!(devices["total"], 1);
+    assert_eq!(admin.get("/api/v1/devices?q=nomatch").1["items"].as_array().unwrap().len(), 0);
+    assert_eq!(admin.get("/api/v1/devices?q=TEST-h").1["items"].as_array().unwrap().len(), 1);
+    assert_eq!(admin.get("/api/v1/devices?status=online").1["items"].as_array().unwrap().len(), 0);
+    assert_eq!(admin.get("/api/v1/devices?status=offline").1["items"].as_array().unwrap().len(), 1);
+    assert_eq!(admin.get(&format!("/api/v1/devices?group={gid}")).1["total"], 1);
+    assert_eq!(admin.get("/api/v1/devices?group=none").1["total"], 0);
+    assert_eq!(admin.get(&format!("/api/v1/devices?ids={dev}")).1["total"], 1);
+    let (_, summary) = admin.get("/api/v1/devices/summary");
+    assert_eq!((summary["total"].as_i64(), summary["online"].as_i64()), (Some(1), Some(0)));
     let (st, detail) = admin.get(&format!("/api/v1/devices/{dev}"));
     assert_eq!(st, 200);
     assert!(detail["inventory"].is_null());
@@ -189,8 +197,11 @@ fn api_v1() {
     let jid = job["id"].as_i64().unwrap();
     let (st, jd) = admin.get(&format!("/api/v1/jobs/{jid}"));
     assert_eq!(st, 200);
-    assert_eq!(jd["runs"][0]["status"], "queued");
+    assert_eq!(jd["counts"]["queued"], 1);
     assert_eq!(jd["job"]["kind"], "script");
+    let (_, runs) = admin.get(&format!("/api/v1/jobs/{jid}/runs"));
+    assert_eq!(runs["items"][0]["status"], "queued");
+    assert_eq!(admin.get(&format!("/api/v1/jobs/{jid}/runs?status=ok")).1["items"].as_array().unwrap().len(), 0);
     // Reboot without the typed confirmation is refused; with the hostname it's accepted.
     let (st, e) = admin.post("/api/v1/jobs", json!({ "action": "reboot", "devices": [dev] }));
     assert_eq!(st, 400);
@@ -203,7 +214,15 @@ fn api_v1() {
     assert_eq!(admin.post(&format!("/api/v1/jobs/{cid}/disable"), json!({})).0, 200);
     assert_eq!(admin.get(&format!("/api/v1/jobs/{cid}")).1["job"]["enabled"], false);
     let (_, jobs) = admin.get("/api/v1/jobs");
-    assert_eq!(jobs.as_array().unwrap().len(), 3);
+    assert_eq!(jobs["items"].as_array().unwrap().len(), 3);
+    let (_, p1) = admin.get("/api/v1/jobs?limit=2");
+    assert_eq!(p1["items"].as_array().unwrap().len(), 2);
+    let cur = p1["next_cursor"].as_str().unwrap().to_owned();
+    let (_, p2) = admin.get(&format!("/api/v1/jobs?limit=2&cursor={cur}"));
+    assert_eq!(p2["items"].as_array().unwrap().len(), 1);
+    assert!(p2["next_cursor"].is_null());
+    assert_eq!(admin.get("/api/v1/scripts?q=uptime").1["items"].as_array().unwrap().len(), 1);
+    assert_eq!(admin.get("/api/v1/scripts?q=nope").1["items"].as_array().unwrap().len(), 0);
     assert_eq!(admin.del(&format!("/api/v1/jobs/{cid}")).0, 200);
 
     // Users: a viewer and an operator.
@@ -212,7 +231,7 @@ fn api_v1() {
     assert_eq!(admin.post("/api/v1/users", json!({ "username": "short", "password": "x", "role": "viewer" })).0, 400);
     assert_eq!(admin.post("/api/v1/users", json!({ "username": "vera", "password": "viewer-pass", "role": "viewer" })).0, 409);
     let (_, users) = admin.get("/api/v1/users");
-    let otto = users["users"].as_array().unwrap().iter().find(|u| u["username"] == "otto").unwrap().clone();
+    let otto = users["items"].as_array().unwrap().iter().find(|u| u["username"] == "otto").unwrap().clone();
     assert_eq!(otto["email"], "otto@example.com");
 
     let mut viewer = Client::login(&s, "vera", "viewer-pass");
@@ -246,18 +265,22 @@ fn api_v1() {
     // Audit: filtered and paged.
     let (st, audit) = admin.get("/api/v1/audit?limit=2");
     assert_eq!(st, 200);
-    assert_eq!(audit["rows"].as_array().unwrap().len(), 2);
-    let next = audit["next"].as_i64().unwrap();
-    let (_, page2) = admin.get(&format!("/api/v1/audit?limit=2&before={next}"));
-    assert!(page2["rows"][0]["id"].as_i64().unwrap() < next);
+    assert_eq!(audit["items"].as_array().unwrap().len(), 2);
+    let last = audit["items"][1]["id"].as_i64().unwrap();
+    let next = audit["next_cursor"].as_str().unwrap().to_owned();
+    let (_, page2) = admin.get(&format!("/api/v1/audit?limit=2&cursor={next}"));
+    assert!(page2["items"][0]["id"].as_i64().unwrap() < last);
     let (_, logins) = admin.get("/api/v1/audit?action=login.failed");
-    assert!(logins["rows"].as_array().unwrap().iter().all(|r| r["action"] == "login.failed"));
-    assert!(!logins["rows"].as_array().unwrap().is_empty());
-    assert!(audit["actions"].as_array().unwrap().iter().any(|a| a == "device.enroll"));
+    assert!(logins["items"].as_array().unwrap().iter().all(|r| r["action"] == "login.failed"));
+    assert!(!logins["items"].as_array().unwrap().is_empty());
+    let (_, by_admin) = admin.get(&format!("/api/v1/audit?user={admin_id}&limit=200"));
+    assert!(by_admin["items"].as_array().unwrap().iter().all(|r| r["user"] == "admin"));
+    let (_, actions) = admin.get("/api/v1/audit/actions?q=enroll");
+    assert!(actions["items"].as_array().unwrap().iter().any(|a| a["id"] == "device.enroll"));
 
     // Device delete, then sign out.
     assert_eq!(admin.del(&format!("/api/v1/devices/{dev}")).0, 200);
-    assert_eq!(admin.get("/api/v1/devices").1.as_array().unwrap().len(), 0);
+    assert_eq!(admin.get("/api/v1/devices").1["items"].as_array().unwrap().len(), 0);
     assert_eq!(admin.post("/api/v1/logout", json!({})).0, 200);
     assert_eq!(admin.get("/api/v1/me").0, 401);
 
@@ -268,4 +291,59 @@ fn api_v1() {
     assert!(html.as_str().unwrap().contains("<div id=\"root\">"));
     assert_eq!(anon.get("/missing.js").0, 404);
     assert_eq!(anon.get("/api/v1/nope").0, 404);
+}
+
+/// 5,000 devices: the device picker's first page and a narrowing search stay fast.
+#[test]
+fn device_picker_at_5000() {
+    let s = start();
+    let mut admin = Client::login(&s, "admin", "admin-password");
+    // Seed straight into the database the server uses (WAL, so it sees them at once).
+    {
+        let db = rusqlite::Connection::open(s._dir.0.join("t.db")).unwrap();
+        db.execute_batch("BEGIN").unwrap();
+        let mut ins = db
+            .prepare(
+                "INSERT INTO devices (id, name, hostname, os, secret_hash, enrolled_at, last_seen, inv_ip, inv_serial, inv_os)
+                 VALUES (?1, ?2, ?2, 'windows', 'x', 0, 0, ?3, ?4, 'Windows 11 Pro')",
+            )
+            .unwrap();
+        for i in 0..5000 {
+            ins.execute(rusqlite::params![
+                format!("seed{i:05}"),
+                format!("PC-{i:05}"),
+                format!("10.{}.{}.{}", i / 65536, (i / 256) % 256, i % 256),
+                format!("SN{i:07}")
+            ])
+            .unwrap();
+        }
+        drop(ins);
+        db.execute_batch("COMMIT").unwrap();
+    }
+    let timed = |c: &mut Client, path: &str| {
+        let t = std::time::Instant::now();
+        let r = c.get(path);
+        (r, t.elapsed())
+    };
+    let ((st, first), took) = timed(&mut admin, "/api/v1/devices?limit=25");
+    assert_eq!(st, 200);
+    assert_eq!(first["items"].as_array().unwrap().len(), 25);
+    assert_eq!(first["total"], 5000);
+    assert_eq!(first["items"][0]["name"], "PC-00000");
+    assert!(took.as_millis() < 300, "first page took {took:?}");
+    // The next page continues where the first stopped.
+    let cur = first["next_cursor"].as_str().unwrap().to_owned();
+    let ((_, second), took) = timed(&mut admin, &format!("/api/v1/devices?limit=25&cursor={cur}"));
+    assert_eq!(second["items"][0]["name"], "PC-00025");
+    assert!(took.as_millis() < 300, "second page took {took:?}");
+    // Search narrows: by name, IP and serial.
+    let ((_, hits), took) = timed(&mut admin, "/api/v1/devices?limit=25&q=PC-0420");
+    assert_eq!(hits["total"], 10);
+    assert!(took.as_millis() < 300, "search took {took:?}");
+    assert_eq!(admin.get("/api/v1/devices?q=10.0.16.1").1["items"][0]["name"], "PC-04097");
+    assert_eq!(admin.get("/api/v1/devices?q=SN0004999").1["total"], 1);
+    // The last page has no cursor.
+    let (_, tail) = admin.get("/api/v1/devices?limit=25&q=PC-0499");
+    assert_eq!(tail["total"], 10);
+    assert!(tail["next_cursor"].is_null());
 }
