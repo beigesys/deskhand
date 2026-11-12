@@ -24,3 +24,10 @@ hex = "0.4"
 rusqlite = { version = "0.37", features = ["bundled"] }
 argon2 = "0.5"
 sha2 = "0.10"
+openidconnect = { version = "4", default-features = false, features = ["reqwest", "rustls-tls", "accept-string-booleans"] }
+oauth2 = { version = "5", default-features = false, features = ["reqwest", "rustls-tls"] }
+base64 = "0.22"
+url = "2"
+
+[dev-dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }

@@ -411,25 +411,49 @@ pub async fn users(State(app): State<Shared>, headers: HeaderMap) -> Response {
             })
             .collect::<String>()
     };
+    let emails = app.db.user_emails().unwrap_or_default();
+    let mut linked: std::collections::HashMap<i64, Vec<String>> = Default::default();
+    for (uid, provider, email) in app.db.identities().unwrap_or_default() {
+        let label = crate::sso::Kind::parse(&provider).map_or(provider.as_str(), |k| k.label()).to_owned();
+        linked.entry(uid).or_default().push(match email {
+            Some(e) => format!("{label} ({e})"),
+            None => label,
+        });
+    }
+    let sso_on = !app.sso.providers.is_empty();
+    let password_hint = if sso_on {
+        "Password (optional with single sign-on)"
+    } else {
+        "Password"
+    };
     let mut b = format!(
         r#"<section class="card"><h2>Add a user</h2><form class="grid" method="post" action="/users">
 <label>User name <input name="username" required autocomplete="off"></label>
-<label>Password <input name="password" type="password" minlength="8" required autocomplete="new-password"></label>
-<label>Role <select name="role">{}</select></label><button>Add user</button></form>
-<p class="muted">Viewers see the device list. Operators can also open desktops and shells. Admins manage everything.</p></section>"#,
-        roles(Role::Operator)
+<label>Email <input name="email" type="email" autocomplete="off" placeholder="links single sign-on"></label>
+<label>{password_hint} <input name="password" type="password" minlength="8" {req} autocomplete="new-password"></label>
+<label>Role <select name="role">{roles}</select></label><button>Add user</button></form>
+<p class="muted">Viewers see the device list. Operators can also open desktops and shells. Admins manage everything.
+A user's email links their Microsoft, Google or GitHub sign-in the first time they use it.</p></section>"#,
+        req = if sso_on { "" } else { "required" },
+        roles = roles(Role::Operator)
     );
     let now = now();
     for (u, created) in &users {
         let you = if u.id == user.id { r#" <span class="muted">(you)</span>"# } else { "" };
+        let ids = match linked.get(&u.id) {
+            Some(v) => format!(" · signs in with {}", esc(&v.join(", "))),
+            None => String::new(),
+        };
         let _ = write!(
             b,
-            r#"<div class="row"><div><b>{name}</b>{you}<div class="muted">added {ago}</div></div>
+            r#"<div class="row"><div><b>{name}</b>{you}<div class="muted">added {ago}{ids}</div></div>
+<form class="bar" method="post" action="/users/{id}/email"><input name="email" type="email" value="{email}" placeholder="email"><button>Save</button></form>
 <form method="post" action="/users/{id}/role"><select name="role" onchange="this.form.submit()">{roles}</select></form>
 <form method="post" action="/users/{id}/delete" onsubmit="return confirm('Delete this user?')"><button class="danger">Delete</button></form></div>"#,
             id = u.id,
             name = esc(&u.username),
             ago = ago(now - created),
+            email = esc(emails.get(&u.id).map_or("", String::as_str)),
             roles = roles(u.role),
         );
     }
@@ -439,8 +463,23 @@ pub async fn users(State(app): State<Shared>, headers: HeaderMap) -> Response {
 #[derive(serde::Deserialize)]
 pub struct NewUser {
     username: String,
+    #[serde(default)]
+    email: String,
+    #[serde(default)]
     password: String,
     role: String,
+}
+
+/// A form's email: trimmed, lowercased, `None` when empty. `Err` when it can't be one.
+fn form_email(s: &str) -> Result<Option<String>, Response> {
+    let e = s.trim().to_ascii_lowercase();
+    if e.is_empty() {
+        return Ok(None);
+    }
+    if !e.contains('@') || e.len() > 254 {
+        return Err((StatusCode::BAD_REQUEST, "that isn't an email address").into_response());
+    }
+    Ok(Some(e))
 }
 
 pub async fn add_user(State(app): State<Shared>, headers: HeaderMap, Form(f): Form<NewUser>) -> Response {
@@ -452,11 +491,28 @@ pub async fn add_user(State(app): State<Shared>, headers: HeaderMap, Form(f): Fo
     let Some(role) = Role::parse(&f.role) else {
         return (StatusCode::BAD_REQUEST, "unknown role").into_response();
     };
-    if username.is_empty() || f.password.len() < 8 {
-        return (StatusCode::BAD_REQUEST, "user name required and password must be 8+ characters").into_response();
+    let email = match form_email(&f.email) {
+        Ok(e) => e,
+        Err(r) => return r,
+    };
+    // Without a password the user can only come in through single sign-on, by email.
+    let sso_only = f.password.is_empty() && email.is_some() && !app.sso.providers.is_empty();
+    if username.is_empty() || (!sso_only && f.password.len() < 8) {
+        return (StatusCode::BAD_REQUEST, "user name required, and a password of 8+ characters (or an email, with single sign-on set up)").into_response();
     }
-    match app.db.add_user(username, &hash_password(&f.password), role, now()) {
-        Ok(_) => app.db.audit(now(), Some(user.id), None, "user.add", &format!("{username} as {}", role.as_str())),
+    if let Some(e) = &email {
+        if app.db.user_by_email(e).ok().flatten().is_some() {
+            return (StatusCode::CONFLICT, "another user has that email").into_response();
+        }
+    }
+    let hash = if sso_only { "!".to_owned() } else { hash_password(&f.password) };
+    match app.db.add_user(username, &hash, role, now()) {
+        Ok(id) => {
+            if let Some(e) = &email {
+                let _ = app.db.set_email(id, Some(e));
+            }
+            app.db.audit(now(), Some(user.id), None, "user.add", &format!("{username} as {}", role.as_str()))
+        }
         Err(rusqlite::Error::SqliteFailure(e, _)) if e.code == rusqlite::ErrorCode::ConstraintViolation => {
             return (StatusCode::CONFLICT, "that user name is taken").into_response()
         }
@@ -499,6 +555,36 @@ pub async fn set_role(
     match app.db.set_role(id, role) {
         Ok(1) => app.db.audit(now(), Some(user.id), None, "user.role", &format!("user {id} -> {}", role.as_str())),
         Ok(_) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return db_error(e),
+    }
+    Redirect::to("/users").into_response()
+}
+
+#[derive(serde::Deserialize)]
+pub struct EmailForm {
+    email: String,
+}
+
+pub async fn set_email(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Form(f): Form<EmailForm>,
+) -> Response {
+    let user = match require(&app, &headers, Role::Admin) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let email = match form_email(&f.email) {
+        Ok(e) => e,
+        Err(r) => return r,
+    };
+    match app.db.set_email(id, email.as_deref()) {
+        Ok(1) => app.db.audit(now(), Some(user.id), None, "user.email", &format!("user {id} -> {}", email.as_deref().unwrap_or("none"))),
+        Ok(_) => return StatusCode::NOT_FOUND.into_response(),
+        Err(rusqlite::Error::SqliteFailure(e, _)) if e.code == rusqlite::ErrorCode::ConstraintViolation => {
+            return (StatusCode::CONFLICT, "another user has that email").into_response()
+        }
         Err(e) => return db_error(e),
     }
     Redirect::to("/users").into_response()

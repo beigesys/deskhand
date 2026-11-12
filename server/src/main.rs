@@ -8,11 +8,14 @@
 //! - `ITHUB_ADMIN_PASSWORD` (optional): with no users yet, creates `admin` with this
 //!   password; without it the server prints a one-time setup link
 //! - `ITHUB_TRUST_PROXY=1`: believe X-Forwarded-Proto/-For from a TLS proxy in front
+//! - `ITHUB_PUBLIC_URL`, `ITHUB_ENTRA_*`, `ITHUB_GOOGLE_*`, `ITHUB_GITHUB_*`,
+//!   `ITHUB_SSO_AUTO_PROVISION`, `ITHUB_PASSWORD_LOGIN`: single sign-on (docs/sso.md)
 
 mod auth;
 mod db;
 mod proxy;
 mod shell;
+mod sso;
 mod ui;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -48,6 +51,10 @@ pub struct App {
     /// Set while there are no users: the token the first admin signs up with.
     pub setup_token: Mutex<Option<String>>,
     pub login_limit: auth::RateLimit,
+    pub sso: sso::Sso,
+    /// ITHUB_PASSWORD_LOGIN, which only takes effect with an SSO provider set up
+    /// (see [`auth::password_login`]).
+    pub password_login: bool,
     pub agents: Mutex<HashMap<String, Agent>>,
     /// Streams the server asked for and is waiting on, by sid, with the device they're for.
     pending: Mutex<HashMap<String, (String, oneshot::Sender<WebSocket>)>>,
@@ -103,6 +110,8 @@ async fn main() {
         trust_proxy: std::env::var("ITHUB_TRUST_PROXY").is_ok_and(|v| v == "1"),
         setup_token: Mutex::new(setup_token),
         login_limit: Default::default(),
+        sso: sso::Sso::from_env(),
+        password_login: std::env::var("ITHUB_PASSWORD_LOGIN").map_or(true, |v| v != "0"),
         agents: Mutex::default(),
         pending: Mutex::default(),
         next_conn: AtomicU64::new(1),
@@ -112,6 +121,8 @@ async fn main() {
         .route("/login", get(auth::login_page).post(auth::login))
         .route("/logout", post(auth::logout))
         .route("/setup", get(auth::setup_page).post(auth::setup))
+        .route("/auth/{provider}/start", get(auth::sso_start))
+        .route("/auth/{provider}/callback", get(auth::sso_callback))
         .route("/devices/{id}/rename", post(ui::rename_device))
         .route("/devices/{id}/move", post(ui::move_device))
         .route("/devices/{id}/delete", post(ui::delete_device))
@@ -121,6 +132,7 @@ async fn main() {
         .route("/enroll/{id}/revoke", post(ui::revoke_token))
         .route("/users", get(ui::users).post(ui::add_user))
         .route("/users/{id}/role", post(ui::set_role))
+        .route("/users/{id}/email", post(ui::set_email))
         .route("/users/{id}/delete", post(ui::delete_user))
         .route("/audit", get(ui::audit))
         .route("/api/enroll", post(enroll))

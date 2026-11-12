@@ -5,7 +5,8 @@ use crate::db::{Role, User};
 use crate::{now, random_hex, ui, App, Shared};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
-use axum::extract::{ConnectInfo, Request, State};
+use crate::sso::{self, Kind, Resolved, SsoError};
+use axum::extract::{ConnectInfo, Path, Query, Request, State};
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{Html, IntoResponse, Redirect, Response};
@@ -146,11 +147,57 @@ pub async fn check_origin(req: Request, next: Next) -> Response {
 
 // --- pages ---
 
+const PASSWORD_FORM: &str = r#"<form method="post" action="/login">
+<input name="username" placeholder="User name" autocomplete="username" required>
+<input type="password" name="password" placeholder="Password" autocomplete="current-password" required>
+<button>Sign in</button>
+</form>"#;
+
+/// Password sign-in is on unless ITHUB_PASSWORD_LOGIN=0 and some SSO provider is set up,
+/// so turning it off can never lock everyone out.
+pub fn password_login(app: &App) -> bool {
+    app.password_login || app.sso.providers.is_empty()
+}
+
 pub async fn login_page(State(app): State<Shared>) -> Response {
     if app.setup_token.lock().unwrap().is_some() {
         return Redirect::to("/setup").into_response();
     }
-    Html(include_str!("login.html")).into_response()
+    let sso: String = app
+        .sso
+        .providers
+        .iter()
+        .map(|p| {
+            format!(
+                r#"<a class="sso" href="/auth/{}/start">Sign in with {}</a>"#,
+                p.kind.key(),
+                p.kind.label()
+            )
+        })
+        .collect();
+    let password = match (password_login(&app), sso.is_empty()) {
+        (false, _) => "",
+        (true, true) => PASSWORD_FORM,
+        (true, false) => &format!(r#"<p class="or">or</p>{PASSWORD_FORM}"#),
+    };
+    Html(
+        include_str!("login.html")
+            .replace("{{sso}}", &sso)
+            .replace("{{password}}", password),
+    )
+    .into_response()
+}
+
+fn message(status: StatusCode, title: &str, body: &str) -> Response {
+    (
+        status,
+        Html(
+            include_str!("message.html")
+                .replace("{{title}}", &ui::esc(title))
+                .replace("{{body}}", body),
+        ),
+    )
+        .into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -165,6 +212,9 @@ pub async fn login(
     headers: HeaderMap,
     Form(f): Form<LoginForm>,
 ) -> Response {
+    if !password_login(&app) {
+        return (StatusCode::FORBIDDEN, "password sign-in is off; use single sign-on").into_response();
+    }
     let ip = client_ip(&app, &headers, peer);
     if !app.login_limit.allow(ip) {
         return Redirect::to("/login?slow").into_response();
@@ -176,10 +226,10 @@ pub async fn login(
         app.db.audit(now(), None, None, "login.failed", &format!("{} from {ip}", f.username.trim()));
         return Redirect::to("/login?bad").into_response();
     };
-    start_session(&app, &headers, &user, &ip.to_string())
+    start_session(&app, &headers, &user, "login", &format!("password from {ip}"))
 }
 
-fn start_session(app: &App, headers: &HeaderMap, user: &User, from: &str) -> Response {
+fn start_session(app: &App, headers: &HeaderMap, user: &User, action: &str, detail: &str) -> Response {
     let token = random_hex(32);
     let now = now();
     if let Err(e) = app.db.add_session(&token, user.id, now + SESSION_SECS) {
@@ -187,7 +237,7 @@ fn start_session(app: &App, headers: &HeaderMap, user: &User, from: &str) -> Res
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
     let _ = app.db.purge_sessions(now);
-    app.db.audit(now, Some(user.id), None, "login", &format!("from {from}"));
+    app.db.audit(now, Some(user.id), None, action, detail);
     (
         [(header::SET_COOKIE, session_cookie(app, headers, &token))],
         Redirect::to("/"),
@@ -216,10 +266,7 @@ pub struct SetupQuery {
     token: Option<String>,
 }
 
-pub async fn setup_page(
-    State(app): State<Shared>,
-    axum::extract::Query(q): axum::extract::Query<SetupQuery>,
-) -> Response {
+pub async fn setup_page(State(app): State<Shared>, Query(q): Query<SetupQuery>) -> Response {
     if app.setup_token.lock().unwrap().is_none() {
         return Redirect::to("/login").into_response();
     }
@@ -265,5 +312,88 @@ pub async fn setup(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     app.db.audit(now(), Some(user.id), None, "setup", "first admin created");
-    start_session(&app, &headers, &user, &ip.to_string())
+    start_session(&app, &headers, &user, "login", &format!("setup from {ip}"))
+}
+
+// --- single sign-on ---
+
+pub async fn sso_start(State(app): State<Shared>, Path(provider): Path<String>) -> Response {
+    let Some(kind) = Kind::parse(&provider).filter(|k| app.sso.provider(*k).is_some()) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match app.sso.start(kind).await {
+        Ok(url) => Redirect::to(&url).into_response(),
+        Err(e) => {
+            log::warn!("{} sign-in: {e}", kind.label());
+            message(StatusCode::BAD_GATEWAY, "Sign-in unavailable", &format!("<p>{}</p>", ui::esc(&e.to_string())))
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct Callback {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+    error_description: Option<String>,
+}
+
+pub async fn sso_callback(
+    State(app): State<Shared>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(provider): Path<String>,
+    Query(q): Query<Callback>,
+) -> Response {
+    let Some(kind) = Kind::parse(&provider).filter(|k| app.sso.provider(*k).is_some()) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let ip = client_ip(&app, &headers, peer);
+    let (Some(code), Some(state)) = (q.code, q.state) else {
+        let why = q.error_description.or(q.error).unwrap_or_else(|| "no authorization code".into());
+        return message(
+            StatusCode::BAD_REQUEST,
+            "Sign-in cancelled",
+            &format!("<p>{} said: {}</p>", kind.label(), ui::esc(&why)),
+        );
+    };
+    let id = match app.sso.finish(kind, &code, &state).await {
+        Ok(id) => id,
+        Err(e) => {
+            log::warn!("{} sign-in from {ip}: {e}", kind.label());
+            app.db.audit(now(), None, None, "sso.failed", &format!("{}: {e} (from {ip})", kind.key()));
+            let status = if matches!(e, SsoError::Provider(_)) { StatusCode::BAD_GATEWAY } else { StatusCode::FORBIDDEN };
+            return message(status, "Sign-in failed", &format!("<p>{}</p>", ui::esc(&e.to_string())));
+        }
+    };
+    match sso::resolve(&app.db, &app.sso, &id, now()) {
+        Ok(Some((user, how))) => {
+            let what = format!("{} {}", kind.key(), id.display);
+            match how {
+                Resolved::Linked => app.db.audit(now(), Some(user.id), None, "sso.link", &what),
+                Resolved::Provisioned => app.db.audit(now(), Some(user.id), None, "sso.provision", &format!("{what} as {}", user.role.as_str())),
+                Resolved::Known => {}
+            }
+            start_session(&app, &headers, &user, "sso.login", &format!("{what} from {ip}"))
+        }
+        Ok(None) => {
+            app.db.audit(now(), None, None, "sso.denied", &format!("{} {} has no user (from {ip})", kind.key(), id.display));
+            let email = match &id.verified_email {
+                Some(e) => format!("<p>Ask an admin to add a user with the email <b>{}</b>, then sign in again.</p>", ui::esc(e)),
+                None => format!(
+                    "<p>{} didn't share a verified email, so an admin can't link you by email. Ask an admin to add you.</p>",
+                    kind.label()
+                ),
+            };
+            message(
+                StatusCode::FORBIDDEN,
+                "No ithub account yet",
+                &format!("<p>You signed in to {} as <b>{}</b>, but no ithub user matches.</p>{email}", kind.label(), ui::esc(&id.display)),
+            )
+        }
+        Err(e) => {
+            log::error!("sso resolve: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }

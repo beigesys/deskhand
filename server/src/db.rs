@@ -53,6 +53,17 @@ CREATE TABLE audit (
     detail TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX audit_ts ON audit(ts);
+"#, r#"
+ALTER TABLE users ADD COLUMN email TEXT;
+CREATE UNIQUE INDEX users_email ON users(email COLLATE NOCASE) WHERE email IS NOT NULL;
+CREATE TABLE user_identities (
+    provider TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email TEXT,
+    created INTEGER NOT NULL,
+    PRIMARY KEY (provider, subject)
+);
 "#];
 
 /// SHA-256 in hex, for tokens and secrets: they're random and long, so a fast hash is
@@ -68,7 +79,7 @@ pub struct User {
     pub role: Role,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Role {
     Viewer,
     Operator,
@@ -252,6 +263,67 @@ impl Db {
     pub fn purge_sessions(&self, now: i64) -> R<()> {
         self.c().execute("DELETE FROM sessions WHERE expires <= ?1", [now])?;
         Ok(())
+    }
+
+    pub fn set_email(&self, id: i64, email: Option<&str>) -> R<usize> {
+        self.c().execute("UPDATE users SET email = ?2 WHERE id = ?1", params![id, email])
+    }
+
+    /// Each user's email, by user id.
+    pub fn user_emails(&self) -> R<std::collections::HashMap<i64, String>> {
+        let c = self.c();
+        let mut s = c.prepare("SELECT id, email FROM users WHERE email IS NOT NULL")?;
+        let rows = s.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect()
+    }
+
+    fn user_where(&self, sql: &str, p: impl rusqlite::Params) -> R<Option<User>> {
+        self.c()
+            .query_row(sql, p, |r| {
+                Ok(User {
+                    id: r.get(0)?,
+                    username: r.get(1)?,
+                    role: Role::parse(&r.get::<_, String>(2)?).unwrap_or(Role::Viewer),
+                })
+            })
+            .optional()
+    }
+
+    // --- single sign-on identities ---
+
+    pub fn identity_user(&self, provider: &str, subject: &str) -> R<Option<User>> {
+        self.user_where(
+            "SELECT u.id, u.username, u.role FROM user_identities i JOIN users u ON u.id = i.user_id
+             WHERE i.provider = ?1 AND i.subject = ?2",
+            params![provider, subject],
+        )
+    }
+
+    pub fn user_by_email(&self, email: &str) -> R<Option<User>> {
+        self.user_where("SELECT id, username, role FROM users WHERE email = ?1 COLLATE NOCASE", [email])
+    }
+
+    pub fn username_taken(&self, username: &str) -> R<bool> {
+        self.c()
+            .query_row("SELECT count(*) FROM users WHERE username = ?1", [username], |r| r.get::<_, i64>(0))
+            .map(|n| n > 0)
+    }
+
+    pub fn link_identity(&self, user_id: i64, provider: &str, subject: &str, email: Option<&str>, now: i64) -> R<()> {
+        self.c().execute(
+            "INSERT INTO user_identities (provider, subject, user_id, email, created) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT (provider, subject) DO UPDATE SET email = excluded.email",
+            params![provider, subject, user_id, email, now],
+        )?;
+        Ok(())
+    }
+
+    /// Linked identities as (user id, provider, email), for the users page.
+    pub fn identities(&self) -> R<Vec<(i64, String, Option<String>)>> {
+        let c = self.c();
+        let mut s = c.prepare("SELECT user_id, provider, email FROM user_identities ORDER BY provider")?;
+        let rows = s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect()
     }
 
     // --- groups ---

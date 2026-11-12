@@ -23,6 +23,9 @@ sudo apt install libx264-dev libopus-dev libpulse-dev libyuv-dev esbuild pkg-con
 cargo build --release
 ```
 
+The server builds as one static binary with `cargo zigbuild --release -p ithub-server
+--target x86_64-unknown-linux-musl` (zig compiles the bundled SQLite).
+
 ## Run
 
 Server:
@@ -38,6 +41,9 @@ Server:
 | `ITHUB_DB` | `./ithub.db` | SQLite database file |
 | `ITHUB_ADMIN_PASSWORD` | unset | With no users yet, creates `admin` with this password |
 | `ITHUB_TRUST_PROXY` | unset | `1` to trust `X-Forwarded-Proto`/`-For` from your TLS proxy (sets `Secure` cookies) |
+| `ITHUB_PUBLIC_URL`, `ITHUB_ENTRA_*`, `ITHUB_GOOGLE_*`, `ITHUB_GITHUB_*` | unset | Single sign-on with Microsoft Entra ID, Google, GitHub: see [docs/sso.md](docs/sso.md) |
+| `ITHUB_SSO_AUTO_PROVISION` | off | `viewer` or `operator`: create users on first SSO sign-in (restricted providers only) |
+| `ITHUB_PASSWORD_LOGIN` | `1` | `0` hides password sign-in once an SSO provider is set up |
 
 Without `ITHUB_ADMIN_PASSWORD`, the first start prints a one-time link,
 `http://SERVER:8080/setup?token=...`, where you create the first admin.
