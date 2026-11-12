@@ -132,6 +132,7 @@ pub async fn detail(
         }
     }
 
+    b.push_str(&crate::jobs_ui::device_card(&app, &user, &device, online));
     let Some((_, inv)) = snapshot else {
         b.push_str(r#"<p class="empty">The agent sends its inventory when it connects. Agents older than this server don't send one.</p>"#);
         return page(&user, "devices", &device.name, &b);

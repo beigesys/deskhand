@@ -28,6 +28,6 @@ openidconnect = { version = "4", default-features = false, features = ["reqwest"
 oauth2 = { version = "5", default-features = false, features = ["reqwest", "rustls-tls"] }
 base64 = "0.22"
 url = "2"
-
-[dev-dependencies]
+cron = "0.17"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+

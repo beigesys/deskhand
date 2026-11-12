@@ -8,6 +8,7 @@
 //!   machine while developing). Arguments after `--` go to voxl as they are.
 
 mod inventory;
+mod jobs;
 mod shell;
 
 use futures_util::{SinkExt, StreamExt};
@@ -20,7 +21,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 
-fn random_hex(bytes: usize) -> String {
+pub fn random_hex(bytes: usize) -> String {
     let mut b = vec![0u8; bytes];
     getrandom::fill(&mut b).expect("random bytes");
     hex::encode(b)
@@ -238,12 +239,22 @@ fn request(cfg: &Config, path: &str) -> tokio_tungstenite::tungstenite::handshak
     req
 }
 
+/// Messages for the server that wait out a reconnect: job output and results.
+struct Outbox {
+    rx: tokio::sync::mpsc::UnboundedReceiver<AgentMsg>,
+    /// Taken from `rx` but not sent because the socket went down.
+    retry: Option<AgentMsg>,
+}
+
 /// Keeps the control socket up, reconnecting with backoff.
 async fn tunnel(cfg: Config) {
     let cfg = std::sync::Arc::new(cfg);
+    let (out_tx, out_rx) = tokio::sync::mpsc::unbounded_channel();
+    let runner = jobs::Runner::new(out_tx);
+    let mut outbox = Outbox { rx: out_rx, retry: None };
     let mut backoff = Duration::from_secs(1);
     loop {
-        match control(&cfg).await {
+        match control(&cfg, &runner, &mut outbox).await {
             Ok(()) => {
                 log::warn!("server closed the connection");
                 backoff = Duration::from_secs(1);
@@ -255,7 +266,7 @@ async fn tunnel(cfg: Config) {
     }
 }
 
-async fn control(cfg: &std::sync::Arc<Config>) -> Result<(), String> {
+async fn control(cfg: &std::sync::Arc<Config>, runner: &jobs::Runner, outbox: &mut Outbox) -> Result<(), String> {
     let (ws, _) = tokio_tungstenite::connect_async(request(cfg, "/agent/connect"))
         .await
         .map_err(|e| e.to_string())?;
@@ -274,8 +285,15 @@ async fn control(cfg: &std::sync::Arc<Config>) -> Result<(), String> {
     let (inv_tx, mut inv_rx) = tokio::sync::mpsc::channel::<ithub_proto::Inventory>(1);
     let mut inv_timer = tokio::time::interval(INVENTORY_EVERY);
     let mut collecting = false;
+    if let Some(m) = outbox.retry.take() {
+        send(&mut tx, outbox, m).await?;
+    }
     loop {
         let m = tokio::select! {
+            Some(out) = outbox.rx.recv() => {
+                send(&mut tx, outbox, out).await?;
+                continue;
+            }
             m = rx.next() => match m {
                 Some(m) => m,
                 None => break,
@@ -297,6 +315,14 @@ async fn control(cfg: &std::sync::Arc<Config>) -> Result<(), String> {
         match m.map_err(|e| e.to_string())? {
             Message::Text(t) => match serde_json::from_str(&t) {
                 Ok(ServerMsg::RefreshInventory) => start_inventory(&inv_tx, &mut collecting),
+                Ok(ServerMsg::RunJob { run_id, shell, body, timeout_s }) => {
+                    log::info!("job run {run_id}: {} script, timeout {timeout_s}s", shell.as_str());
+                    runner.run_script(run_id, shell, body, timeout_s);
+                }
+                Ok(ServerMsg::RunAction { run_id, action }) => {
+                    log::info!("job run {run_id}: {}", action.name());
+                    runner.run_action(run_id, action);
+                }
                 Ok(ServerMsg::Open { sid, kind }) => {
                     let cfg = cfg.clone();
                     tokio::spawn(async move {
@@ -319,6 +345,20 @@ async fn control(cfg: &std::sync::Arc<Config>) -> Result<(), String> {
             Message::Close(_) => break,
             _ => {}
         }
+    }
+    Ok(())
+}
+
+/// Sends a job message; one that can't go out is kept for the next connection.
+async fn send<S>(tx: &mut S, outbox: &mut Outbox, m: AgentMsg) -> Result<(), String>
+where
+    S: futures_util::Sink<Message> + Unpin,
+    S::Error: std::fmt::Display,
+{
+    let text = serde_json::to_string(&m).unwrap();
+    if let Err(e) = tx.send(Message::Text(text.into())).await {
+        outbox.retry = Some(m);
+        return Err(e.to_string());
     }
     Ok(())
 }

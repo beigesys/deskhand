@@ -82,6 +82,60 @@ CREATE TABLE inventory (
     json TEXT NOT NULL
 );
 CREATE INDEX inventory_device ON inventory(device_id, id);
+"#, r#"
+CREATE TABLE scripts (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    shell TEXT NOT NULL CHECK (shell IN ('powershell', 'cmd', 'bash', 'sh')),
+    body TEXT NOT NULL,
+    timeout_s INTEGER NOT NULL,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created INTEGER NOT NULL,
+    updated INTEGER NOT NULL
+);
+CREATE TABLE jobs (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    -- What runs: a copy of the script as it was when the job was made, or a built-in
+    -- action as JSON.
+    script_id INTEGER REFERENCES scripts(id) ON DELETE SET NULL,
+    shell TEXT,
+    body TEXT,
+    timeout_s INTEGER NOT NULL,
+    action TEXT,
+    -- Who: 'devices' (target_devices, a JSON array of ids), 'group' or 'all'.
+    target_kind TEXT NOT NULL CHECK (target_kind IN ('devices', 'group', 'all')),
+    target_devices TEXT,
+    target_group INTEGER REFERENCES groups(id) ON DELETE SET NULL,
+    -- When: NULL runs once, at creation; otherwise a cron expression (UTC).
+    schedule TEXT,
+    next_fire INTEGER,
+    last_fired INTEGER,
+    -- How long a run waits for an offline device.
+    expires_after INTEGER NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created INTEGER NOT NULL
+);
+CREATE INDEX jobs_due ON jobs(next_fire) WHERE schedule IS NOT NULL AND enabled = 1;
+CREATE TABLE job_runs (
+    id INTEGER PRIMARY KEY,
+    job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    -- The agent that carries the run out when it isn't the device itself (wake-on-LAN).
+    via TEXT,
+    status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'ok', 'failed', 'timeout', 'offline')),
+    exit_code INTEGER,
+    stdout TEXT NOT NULL DEFAULT '',
+    stderr TEXT NOT NULL DEFAULT '',
+    queued INTEGER NOT NULL,
+    expires INTEGER NOT NULL,
+    started INTEGER,
+    finished INTEGER
+);
+CREATE INDEX job_runs_job ON job_runs(job_id);
+CREATE INDEX job_runs_device ON job_runs(device_id, status);
+CREATE INDEX job_runs_status ON job_runs(status);
 "#];
 
 /// Inventory snapshots kept per device.
@@ -174,7 +228,7 @@ impl Db {
         Ok(Db(Mutex::new(c)))
     }
 
-    fn c(&self) -> std::sync::MutexGuard<'_, Connection> {
+    pub(crate) fn c(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.0.lock().unwrap()
     }
 

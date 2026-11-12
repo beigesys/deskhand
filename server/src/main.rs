@@ -14,6 +14,8 @@
 mod auth;
 mod db;
 mod inventory;
+mod jobs;
+mod jobs_ui;
 mod proxy;
 mod shell;
 mod sso;
@@ -60,6 +62,8 @@ pub struct App {
     /// Streams the server asked for and is waiting on, by sid, with the device they're for.
     pending: Mutex<HashMap<String, (String, oneshot::Sender<WebSocket>)>>,
     next_conn: AtomicU64,
+    /// Job output and status changes, for open job pages.
+    pub job_events: tokio::sync::broadcast::Sender<jobs::Event>,
 }
 
 pub type Shared = Arc<App>;
@@ -132,7 +136,9 @@ async fn main() {
         agents: Mutex::default(),
         pending: Mutex::default(),
         next_conn: AtomicU64::new(1),
+        job_events: tokio::sync::broadcast::channel(1024).0,
     });
+    tokio::spawn(jobs::scheduler(app.clone()));
     let router = Router::new()
         .route("/", get(ui::devices))
         .route("/login", get(auth::login_page).post(auth::login))
@@ -155,6 +161,15 @@ async fn main() {
         .route("/users/{id}/email", post(ui::set_email))
         .route("/users/{id}/delete", post(ui::delete_user))
         .route("/audit", get(ui::audit))
+        .route("/scripts", get(jobs_ui::scripts).post(jobs_ui::create_script))
+        .route("/scripts/new", get(jobs_ui::new_script))
+        .route("/scripts/{id}", get(jobs_ui::script).post(jobs_ui::update_script))
+        .route("/scripts/{id}/delete", post(jobs_ui::delete_script))
+        .route("/jobs", get(jobs_ui::jobs_list).post(jobs_ui::create_job))
+        .route("/jobs/new", get(jobs_ui::new_job))
+        .route("/jobs/{id}", get(jobs_ui::job))
+        .route("/jobs/{id}/events", get(jobs_ui::events))
+        .route("/jobs/{id}/{op}", post(jobs_ui::job_action))
         .route("/api/enroll", post(enroll))
         .route("/agent/connect", get(agent_connect))
         .route("/agent/stream/{sid}", get(agent_stream))
@@ -240,6 +255,8 @@ async fn control(app: Shared, id: String, ip: String, ws: WebSocket) {
         .lock()
         .unwrap()
         .insert(id.clone(), Agent { voxl_token, since: now(), conn, tx });
+    // Runs that waited for this device to come online.
+    jobs::dispatch(&app, &id);
     let mut ping = tokio::time::interval(Duration::from_secs(20));
     let mut ticks = 0u32;
     loop {
@@ -258,7 +275,11 @@ async fn control(app: Shared, id: String, ip: String, ws: WebSocket) {
                             log::error!("saving inventory for {id}: {e}");
                         }
                     }
-                    Ok(_) => {}
+                    Ok(AgentMsg::JobOutput { run_id, stream, data }) => jobs::on_output(&app, &id, run_id, stream, data),
+                    Ok(AgentMsg::JobResult { run_id, status, exit_code, stdout, stderr }) => {
+                        jobs::on_result(&app, &id, run_id, status, exit_code, stdout, stderr)
+                    }
+                    Ok(AgentMsg::Hello { .. }) => {}
                     Err(e) => log::warn!("agent {id} sent something unreadable: {e}"),
                 },
                 _ => {}

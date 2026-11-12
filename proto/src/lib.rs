@@ -21,6 +21,102 @@ pub enum AgentMsg {
     },
     /// What the device is: sent after Hello, every few hours, and when asked.
     Inventory { inventory: Box<Inventory> },
+    /// Output from a running job, as it comes. `data` is UTF-8 (invalid bytes replaced).
+    JobOutput { run_id: i64, stream: OutStream, data: String },
+    /// A job or action finished. `stdout`/`stderr` are the whole output, up to
+    /// [`OUTPUT_CAP`] bytes each.
+    JobResult {
+        run_id: i64,
+        status: JobStatus,
+        exit_code: Option<i32>,
+        stdout: String,
+        stderr: String,
+    },
+}
+
+/// Most output kept per stream of a job run, in bytes.
+pub const OUTPUT_CAP: usize = 256 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutStream {
+    Stdout,
+    Stderr,
+}
+
+/// How a job run ended on the agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobStatus {
+    /// Exit code 0 (or the action was carried out).
+    Ok,
+    Failed,
+    /// Killed, with everything it started, after `timeout_s`.
+    Timeout,
+}
+
+/// What runs a job's script.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptShell {
+    Powershell,
+    Cmd,
+    Bash,
+    Sh,
+}
+
+impl ScriptShell {
+    pub const ALL: [ScriptShell; 4] = [ScriptShell::Powershell, ScriptShell::Cmd, ScriptShell::Bash, ScriptShell::Sh];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ScriptShell::Powershell => "powershell",
+            ScriptShell::Cmd => "cmd",
+            ScriptShell::Bash => "bash",
+            ScriptShell::Sh => "sh",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<ScriptShell> {
+        ScriptShell::ALL.into_iter().find(|x| x.as_str() == s)
+    }
+}
+
+/// Built-in actions, run through the same pipeline as scripts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum Action {
+    Reboot {
+        #[serde(default)]
+        delay_s: u32,
+        #[serde(default)]
+        message: Option<String>,
+    },
+    Shutdown {
+        #[serde(default)]
+        delay_s: u32,
+        #[serde(default)]
+        message: Option<String>,
+    },
+    /// Signs out the console user (Windows).
+    Logoff,
+    /// Locks the console session (Windows).
+    Lock,
+    /// Sent to another agent on the target's network: it broadcasts a magic packet for
+    /// each MAC to each address (UDP port 9).
+    WakeOnLan { macs: Vec<String>, broadcasts: Vec<String> },
+}
+
+impl Action {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Action::Reboot { .. } => "reboot",
+            Action::Shutdown { .. } => "shutdown",
+            Action::Logoff => "logoff",
+            Action::Lock => "lock",
+            Action::WakeOnLan { .. } => "wake",
+        }
+    }
 }
 
 /// Server to agent.
@@ -35,6 +131,10 @@ pub enum ServerMsg {
     },
     /// Collect and send the inventory now.
     RefreshInventory,
+    /// Run a script; answered with `JobOutput`s and one `JobResult`.
+    RunJob { run_id: i64, shell: ScriptShell, body: String, timeout_s: u64 },
+    /// Carry out a built-in action; answered with one `JobResult`.
+    RunAction { run_id: i64, action: Action },
 }
 
 /// What a stream connects to on the agent.

@@ -43,7 +43,7 @@ pub(crate) fn db_error(e: rusqlite::Error) -> Response {
 /// The page frame: header with navigation for the user's role, then `body`.
 pub(crate) fn page(user: &User, active: &str, title: &str, body: &str) -> Response {
     let mut nav = String::new();
-    let mut links = vec![("devices", "/", "Devices")];
+    let mut links = vec![("devices", "/", "Devices"), ("jobs", "/jobs", "Jobs"), ("scripts", "/scripts", "Scripts")];
     if user.role == Role::Admin {
         links.extend([
             ("groups", "/groups", "Groups"),
