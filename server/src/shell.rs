@@ -9,7 +9,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
-use ithub_proto::StreamKind;
+use deskhand_proto::StreamKind;
 
 pub async fn page(State(app): State<Shared>, Path(id): Path<String>, headers: HeaderMap) -> Response {
     if let Err(r) = require(&app, &headers, Role::Operator) {

@@ -631,6 +631,65 @@ dependencies = [
 ]
 
 [[package]]
+name = "deskhand-agent"
+version = "0.1.0"
+dependencies = [
+ "deskhand-proto",
+ "dirs",
+ "env_logger",
+ "futures-util",
+ "getrandom 0.3.4",
+ "hex",
+ "libc",
+ "log",
+ "portable-pty",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "ureq",
+ "voxl-server",
+ "windows 0.62.2",
+ "winreg 0.56.0",
+ "wmi",
+]
+
+[[package]]
+name = "deskhand-proto"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "deskhand-server"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "cron",
+ "deskhand-proto",
+ "env_logger",
+ "futures-util",
+ "getrandom 0.3.4",
+ "hex",
+ "hyper",
+ "hyper-util",
+ "log",
+ "oauth2",
+ "openidconnect",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1462,65 +1521,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
 dependencies = [
  "either",
-]
-
-[[package]]
-name = "ithub-agent"
-version = "0.1.0"
-dependencies = [
- "dirs",
- "env_logger",
- "futures-util",
- "getrandom 0.3.4",
- "hex",
- "ithub-proto",
- "libc",
- "log",
- "portable-pty",
- "serde",
- "serde_json",
- "sysinfo",
- "tokio",
- "tokio-tungstenite 0.30.0",
- "ureq",
- "voxl-server",
- "windows 0.62.2",
- "winreg 0.56.0",
- "wmi",
-]
-
-[[package]]
-name = "ithub-proto"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "ithub-server"
-version = "0.1.0"
-dependencies = [
- "argon2",
- "axum",
- "base64 0.22.1",
- "chrono",
- "cron",
- "env_logger",
- "futures-util",
- "getrandom 0.3.4",
- "hex",
- "hyper",
- "hyper-util",
- "ithub-proto",
- "log",
- "oauth2",
- "openidconnect",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tokio",
- "url",
 ]
 
 [[package]]

@@ -2,7 +2,7 @@
 
 ## Rule: one .exe, nothing installed
 
-`ithub-agent.exe` and `ithub-server.exe` import only DLLs that ship with Windows.
+`deskhand-agent.exe` and `deskhand-server.exe` import only DLLs that ship with Windows.
 Both builds below enforce this and fail otherwise.
 
 | | CI (`.github/workflows/windows.yml`) | Cross from Linux (`scripts/build-windows.sh`) |
@@ -25,7 +25,7 @@ The server is 3.2 MB and imports only kernel32, msvcrt, ntdll, ws2_32 and bcrypt
 None. voxl's `build.rs` calls `vcpkg::Config::new().find_package(..)`, which reads
 `VCPKGRS_TRIPLET`. The vcpkg crate also requires `crt-static` with a `*-static` triplet,
 and `.cargo/config.toml` supplies it. voxl's own CI uses `x64-windows-static-md`,
-which links the CRT dynamically and so breaks the rule. ithub's CI uses
+which links the CRT dynamically and so breaks the rule. deskhand's CI uses
 `x64-windows-static` instead. With mingw, the C/C++ runtime pieces the codecs need (libgcc, winpthread) are linked
 statically by Rust's self-contained mingw linking. The codecs are libvpx (VP9) and OpenH264. The import
 check confirms this.
@@ -36,8 +36,8 @@ A service runs in session 0, which has no display, so it can't capture or inject
 input itself. Like MeshCentral, the agent is one exe that runs in two modes:
 
 ```
-ithub-agent.exe service          # SYSTEM, session 0: tunnel to the server, owns the helper
-ithub-agent.exe helper --port N  # SYSTEM, in the console session: voxl itself
+deskhand-agent.exe service          # SYSTEM, session 0: tunnel to the server, owns the helper
+deskhand-agent.exe helper --port N  # SYSTEM, in the console session: voxl itself
 ```
 
 ### Service (session 0)
@@ -99,7 +99,7 @@ Gaps to fill in a voxl fork (`vendor/voxl`) or in the agent:
 
 ### Install
 
-`ithub-agent.exe install --server wss://host --key K` copies itself to
-`%ProgramFiles%\ithub\`, writes the config to `%ProgramData%\ithub\agent.toml` (ACL:
+`deskhand-agent.exe install --server wss://host --key K` copies itself to
+`%ProgramFiles%\deskhand\`, writes the config to `%ProgramData%\deskhand\agent.toml` (ACL:
 SYSTEM and Administrators only), registers the service, sets `SoftwareSASGeneration`,
 and starts it. `uninstall` reverses each of these steps.

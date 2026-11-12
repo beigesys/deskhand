@@ -1,10 +1,10 @@
-//! ithub agent: runs voxl on a loopback port and dials out to the ithub server, which
+//! deskhand agent: runs voxl on a loopback port and dials out to the deskhand server, which
 //! reaches that voxl through streams the agent opens on request.
 //!
-//! - `ithub-agent enroll --server URL --token T`: trades a dashboard enrollment token for
+//! - `deskhand-agent enroll --server URL --token T`: trades a dashboard enrollment token for
 //!   this device's id and secret, saved to `agent.json` in the config dir.
-//! - `ithub-agent [run]`: connects with that identity. `--server` overrides the saved
-//!   server URL; `--config` / `ITHUB_CONFIG` picks another file (several agents on one
+//! - `deskhand-agent [run]`: connects with that identity. `--server` overrides the saved
+//!   server URL; `--config` / `DESKHAND_CONFIG` picks another file (several agents on one
 //!   machine while developing). Arguments after `--` go to voxl as they are.
 
 mod inventory;
@@ -12,7 +12,7 @@ mod jobs;
 mod shell;
 
 use futures_util::{SinkExt, StreamExt};
-use ithub_proto::{AgentMsg, EnrollRequest, EnrollResponse, ServerMsg, StreamKind};
+use deskhand_proto::{AgentMsg, EnrollRequest, EnrollResponse, ServerMsg, StreamKind};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -70,7 +70,7 @@ struct Identity {
 fn default_config() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("ithub")
+        .join("deskhand")
         .join("agent.json")
 }
 
@@ -145,8 +145,8 @@ struct Config {
 }
 
 const USAGE: &str = "usage:
-  ithub-agent enroll --server URL --token TOKEN [--config FILE]
-  ithub-agent [run] [--server URL] [--config FILE] [-- voxl flags]";
+  deskhand-agent enroll --server URL --token TOKEN [--config FILE]
+  deskhand-agent [run] [--server URL] [--config FILE] [-- voxl flags]";
 
 fn fail(msg: &str) -> ! {
     eprintln!("{msg}");
@@ -155,8 +155,8 @@ fn fail(msg: &str) -> ! {
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    let mut server = std::env::var("ITHUB_SERVER").ok();
-    let mut config = std::env::var("ITHUB_CONFIG").ok().map(PathBuf::from);
+    let mut server = std::env::var("DESKHAND_SERVER").ok();
+    let mut config = std::env::var("DESKHAND_CONFIG").ok().map(PathBuf::from);
     let mut token = None;
     let mut voxl_args = Vec::new();
     let mut args = std::env::args().skip(1).peekable();
@@ -195,7 +195,7 @@ fn main() {
     }
 
     let identity = load(&config).unwrap_or_else(|e| {
-        fail(&format!("not enrolled ({e}); run `ithub-agent enroll --server URL --token TOKEN` first"))
+        fail(&format!("not enrolled ({e}); run `deskhand-agent enroll --server URL --token TOKEN` first"))
     });
     // A free loopback port for voxl: bind, read it back, release.
     let voxl_port = std::net::TcpListener::bind("127.0.0.1:0")
@@ -282,7 +282,7 @@ async fn control(cfg: &std::sync::Arc<Config>, runner: &jobs::Runner, outbox: &m
         .map_err(|e| e.to_string())?;
     log::info!("connected to {}", cfg.server);
     // Inventory: once now, every few hours, and when the server asks.
-    let (inv_tx, mut inv_rx) = tokio::sync::mpsc::channel::<ithub_proto::Inventory>(1);
+    let (inv_tx, mut inv_rx) = tokio::sync::mpsc::channel::<deskhand_proto::Inventory>(1);
     let mut inv_timer = tokio::time::interval(INVENTORY_EVERY);
     let mut collecting = false;
     if let Some(m) = outbox.retry.take() {
@@ -366,7 +366,7 @@ where
 const INVENTORY_EVERY: Duration = Duration::from_secs(4 * 3600);
 
 /// Starts a collection unless one is already running; the result arrives on `tx`.
-fn start_inventory(tx: &tokio::sync::mpsc::Sender<ithub_proto::Inventory>, collecting: &mut bool) {
+fn start_inventory(tx: &tokio::sync::mpsc::Sender<deskhand_proto::Inventory>, collecting: &mut bool) {
     if std::mem::replace(collecting, true) {
         return;
     }

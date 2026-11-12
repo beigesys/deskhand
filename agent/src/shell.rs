@@ -3,7 +3,7 @@
 //! are [`ShellControl`] JSON.
 
 use futures_util::{SinkExt, StreamExt};
-use ithub_proto::ShellControl;
+use deskhand_proto::ShellControl;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 use tokio::sync::mpsc;

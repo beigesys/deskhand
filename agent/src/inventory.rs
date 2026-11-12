@@ -1,7 +1,7 @@
 //! What this machine is: OS, hardware, disks, network, software and security state.
 //! Every probe fails soft: what it can't find stays `None` or empty.
 
-use ithub_proto::{Cpu, Disk, Hardware, Inventory, Memory, Nic, OsInfo};
+use deskhand_proto::{Cpu, Disk, Hardware, Inventory, Memory, Nic, OsInfo};
 use sysinfo::{Disks, Networks, Product, System};
 
 /// Collects on a thread of its own (Windows COM wants one it can initialize) and waits.
@@ -103,7 +103,7 @@ fn collect_blocking() -> Inventory {
 #[cfg(target_os = "linux")]
 mod platform {
     use super::clean;
-    use ithub_proto::{Encryption, Firewall, Inventory, Software};
+    use deskhand_proto::{Encryption, Firewall, Inventory, Software};
     use std::path::Path;
     use std::process::Command;
 
@@ -244,7 +244,7 @@ mod platform {
 #[cfg(windows)]
 mod platform {
     use super::clean;
-    use ithub_proto::{Antivirus, Encryption, Firewall, Inventory, Software};
+    use deskhand_proto::{Antivirus, Encryption, Firewall, Inventory, Software};
     use serde::Deserialize;
     use winreg::enums::{HKEY_LOCAL_MACHINE, HKEY_USERS, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY};
     use winreg::RegKey;
@@ -357,7 +357,7 @@ mod platform {
         out
     }
 
-    fn firewall(hklm: &RegKey) -> Vec<ithub_proto::Firewall> {
+    fn firewall(hklm: &RegKey) -> Vec<deskhand_proto::Firewall> {
         const BASE: &str = r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy";
         [("Domain", "DomainProfile"), ("Private", "StandardProfile"), ("Public", "PublicProfile")]
             .into_iter()
@@ -475,5 +475,5 @@ mod platform {
 
 #[cfg(not(any(target_os = "linux", windows)))]
 mod platform {
-    pub fn fill(_: &mut ithub_proto::Inventory) {}
+    pub fn fill(_: &mut deskhand_proto::Inventory) {}
 }

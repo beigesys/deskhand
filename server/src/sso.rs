@@ -4,7 +4,7 @@
 //!
 //! A login finds its user by provider and subject first, then by a verified email that
 //! matches a user's email (linking the identity on the way). New users are created only
-//! with `ITHUB_SSO_AUTO_PROVISION` and only for a provider restricted to one tenant,
+//! with `DESKHAND_SSO_AUTO_PROVISION` and only for a provider restricted to one tenant,
 //! Workspace domain or org.
 
 use crate::db::{Db, Role, User};
@@ -201,50 +201,50 @@ impl Sso {
     /// From the environment; providers with missing settings are left off with a warning.
     pub fn from_env() -> Sso {
         let mut providers = Vec::new();
-        let public = env("ITHUB_PUBLIC_URL");
-        let wants_any = ["ITHUB_ENTRA_CLIENT_ID", "ITHUB_GOOGLE_CLIENT_ID", "ITHUB_GITHUB_CLIENT_ID"]
+        let public = env("DESKHAND_PUBLIC_URL");
+        let wants_any = ["DESKHAND_ENTRA_CLIENT_ID", "DESKHAND_GOOGLE_CLIENT_ID", "DESKHAND_GITHUB_CLIENT_ID"]
             .iter()
             .any(|v| env(v).is_some());
         match (&public, wants_any) {
-            (None, true) => log::error!("single sign-on is off: set ITHUB_PUBLIC_URL (the https:// address users open)"),
+            (None, true) => log::error!("single sign-on is off: set DESKHAND_PUBLIC_URL (the https:// address users open)"),
             (Some(public), _) => {
-                if let Some(id) = env("ITHUB_ENTRA_CLIENT_ID") {
-                    match (env("ITHUB_ENTRA_TENANT_ID"), env("ITHUB_ENTRA_CLIENT_SECRET")) {
+                if let Some(id) = env("DESKHAND_ENTRA_CLIENT_ID") {
+                    match (env("DESKHAND_ENTRA_TENANT_ID"), env("DESKHAND_ENTRA_CLIENT_SECRET")) {
                         (Some(t), _) if ["common", "organizations", "consumers"].contains(&t.to_ascii_lowercase().as_str()) => {
-                            log::error!("Entra sign-in is off: ITHUB_ENTRA_TENANT_ID must be your tenant's id, not {t:?}")
+                            log::error!("Entra sign-in is off: DESKHAND_ENTRA_TENANT_ID must be your tenant's id, not {t:?}")
                         }
                         (Some(t), Some(secret)) => providers.push(Provider::entra(&t, &id, &secret, public)),
-                        _ => log::error!("Entra sign-in is off: set ITHUB_ENTRA_TENANT_ID and ITHUB_ENTRA_CLIENT_SECRET"),
+                        _ => log::error!("Entra sign-in is off: set DESKHAND_ENTRA_TENANT_ID and DESKHAND_ENTRA_CLIENT_SECRET"),
                     }
                 }
-                if let Some(id) = env("ITHUB_GOOGLE_CLIENT_ID") {
-                    match env("ITHUB_GOOGLE_CLIENT_SECRET") {
+                if let Some(id) = env("DESKHAND_GOOGLE_CLIENT_ID") {
+                    match env("DESKHAND_GOOGLE_CLIENT_SECRET") {
                         Some(secret) => providers.push(Provider::oidc(
                             Kind::Google,
                             "https://accounts.google.com",
                             &id,
                             &secret,
                             public,
-                            env("ITHUB_GOOGLE_HD").map(|d| d.to_ascii_lowercase()),
+                            env("DESKHAND_GOOGLE_HD").map(|d| d.to_ascii_lowercase()),
                         )),
-                        None => log::error!("Google sign-in is off: set ITHUB_GOOGLE_CLIENT_SECRET"),
+                        None => log::error!("Google sign-in is off: set DESKHAND_GOOGLE_CLIENT_SECRET"),
                     }
                 }
-                if let Some(id) = env("ITHUB_GITHUB_CLIENT_ID") {
-                    match env("ITHUB_GITHUB_CLIENT_SECRET") {
-                        Some(secret) => providers.push(Provider::github(&id, &secret, public, env("ITHUB_GITHUB_ORG"))),
-                        None => log::error!("GitHub sign-in is off: set ITHUB_GITHUB_CLIENT_SECRET"),
+                if let Some(id) = env("DESKHAND_GITHUB_CLIENT_ID") {
+                    match env("DESKHAND_GITHUB_CLIENT_SECRET") {
+                        Some(secret) => providers.push(Provider::github(&id, &secret, public, env("DESKHAND_GITHUB_ORG"))),
+                        None => log::error!("GitHub sign-in is off: set DESKHAND_GITHUB_CLIENT_SECRET"),
                     }
                 }
             }
             (None, false) => {}
         }
-        let auto_provision = match env("ITHUB_SSO_AUTO_PROVISION").as_deref() {
+        let auto_provision = match env("DESKHAND_SSO_AUTO_PROVISION").as_deref() {
             None | Some("0") | Some("off") => None,
             Some("viewer") => Some(Role::Viewer),
             Some("operator") => Some(Role::Operator),
             Some(other) => {
-                log::error!("ITHUB_SSO_AUTO_PROVISION={other:?} isn't viewer or operator; provisioning stays off");
+                log::error!("DESKHAND_SSO_AUTO_PROVISION={other:?} isn't viewer or operator; provisioning stays off");
                 None
             }
         };
@@ -392,7 +392,7 @@ impl Sso {
                 .get(format!("{}{path}", p.github_api))
                 .bearer_auth(access)
                 .header("accept", "application/vnd.github+json")
-                .header("user-agent", "ithub");
+                .header("user-agent", "deskhand");
             async move {
                 let r = req.send().await.map_err(|e| SsoError::Provider(e.to_string()))?;
                 let status = r.status();
@@ -777,7 +777,7 @@ mod tests {
             let url = url::Url::parse(&sso.start(Kind::Google).await.unwrap()).unwrap();
             let q: HashMap<String, String> = url.query_pairs().into_owned().collect();
             assert_eq!(q["code_challenge_method"], "S256");
-            assert_eq!(q["redirect_uri"], "https://ithub.test/auth/google/callback");
+            assert_eq!(q["redirect_uri"], "https://deskhand.test/auth/google/callback");
             {
                 let mut f = fake.0.lock().unwrap();
                 f.nonce = q["nonce"].clone();
@@ -790,7 +790,7 @@ mod tests {
         #[tokio::test]
         async fn full_google_style_sign_in() {
             let (issuer, fake) = serve().await;
-            let provider = Provider::oidc(Kind::Google, &issuer, "cid", "secret", "https://ithub.test", Some("example.com".into()));
+            let provider = Provider::oidc(Kind::Google, &issuer, "cid", "secret", "https://deskhand.test", Some("example.com".into()));
             let sso = Sso::new(vec![provider], None);
 
             let id = sign_in(&sso, &fake, Some("example.com")).await.unwrap();

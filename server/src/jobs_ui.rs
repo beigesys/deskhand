@@ -11,7 +11,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{KeepAlive, Sse};
 use axum::response::{IntoResponse, Redirect, Response};
 use futures_util::StreamExt;
-use ithub_proto::{Action, ScriptShell};
+use deskhand_proto::{Action, ScriptShell};
 use std::convert::Infallible;
 use std::fmt::Write;
 

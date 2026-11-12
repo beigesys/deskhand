@@ -4,7 +4,7 @@
 
 use crate::db::Db;
 use crate::{now, send_to_agent, App, Shared};
-use ithub_proto::{Action, JobStatus, OutStream, ScriptShell, ServerMsg, OUTPUT_CAP};
+use deskhand_proto::{Action, JobStatus, OutStream, ScriptShell, ServerMsg, OUTPUT_CAP};
 use rusqlite::{params, OptionalExtension, Row};
 use std::net::Ipv4Addr;
 use std::str::FromStr;
@@ -629,7 +629,7 @@ fn virtual_nic(name: &str) -> bool {
 }
 
 /// IPv4 addresses (with prefix) on real interfaces.
-fn lan_ips(inv: &ithub_proto::Inventory) -> Vec<(Ipv4Addr, u8)> {
+fn lan_ips(inv: &deskhand_proto::Inventory) -> Vec<(Ipv4Addr, u8)> {
     inv.network
         .iter()
         .filter(|n| !virtual_nic(&n.name))
@@ -639,7 +639,7 @@ fn lan_ips(inv: &ithub_proto::Inventory) -> Vec<(Ipv4Addr, u8)> {
 
 /// The target's wakeable interfaces: (MAC, network, prefix length, broadcast address),
 /// for real IPv4 LANs (not loopback, link-local, virtual, or host routes like a VPN's /32).
-fn lan_interfaces(inv: &ithub_proto::Inventory) -> Vec<(String, u32, u8, Ipv4Addr)> {
+fn lan_interfaces(inv: &deskhand_proto::Inventory) -> Vec<(String, u32, u8, Ipv4Addr)> {
     let mut out = Vec::new();
     for nic in inv.network.iter().filter(|n| !virtual_nic(&n.name)) {
         let Some(mac) = nic.mac.as_deref().filter(|m| !m.is_empty() && *m != "00:00:00:00:00:00") else {
@@ -767,7 +767,7 @@ pub async fn scheduler(app: Shared) {
             }
         }
         for run in lost {
-            if app.db.fail_run(run, "running", "failed", "\n[ithub: no result from the agent]", now).unwrap_or(false) {
+            if app.db.fail_run(run, "running", "failed", "\n[deskhand: no result from the agent]", now).unwrap_or(false) {
                 send_status(&app, run);
             }
         }
@@ -790,16 +790,16 @@ mod tests {
 
     #[test]
     fn lans() {
-        let inv = ithub_proto::Inventory {
+        let inv = deskhand_proto::Inventory {
             network: vec![
-                ithub_proto::Nic { name: "lo".into(), mac: None, ips: vec!["127.0.0.1/8".into()] },
-                ithub_proto::Nic {
+                deskhand_proto::Nic { name: "lo".into(), mac: None, ips: vec!["127.0.0.1/8".into()] },
+                deskhand_proto::Nic {
                     name: "eth0".into(),
                     mac: Some("aa:bb:cc:dd:ee:ff".into()),
                     ips: vec!["192.168.1.20/24".into(), "fe80::1/64".into()],
                 },
-                ithub_proto::Nic { name: "ts".into(), mac: Some("11:22:33:44:55:66".into()), ips: vec!["100.64.0.5/32".into()] },
-                ithub_proto::Nic { name: "docker0".into(), mac: Some("02:42:ac:11:00:01".into()), ips: vec!["172.17.0.1/16".into()] },
+                deskhand_proto::Nic { name: "ts".into(), mac: Some("11:22:33:44:55:66".into()), ips: vec!["100.64.0.5/32".into()] },
+                deskhand_proto::Nic { name: "docker0".into(), mac: Some("02:42:ac:11:00:01".into()), ips: vec!["172.17.0.1/16".into()] },
             ],
             ..Default::default()
         };

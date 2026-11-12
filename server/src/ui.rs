@@ -314,8 +314,8 @@ fn enroll_page(app: &crate::App, headers: &HeaderMap, user: &User, new_token: Op
         let _ = write!(
             b,
             r#"<section class="card new"><h2>New token</h2><p class="muted">Shown once. Copy it now.</p><pre>{t}</pre>
-<h3>Linux (as root)</h3><pre>curl -fsSL {base}/dl/ithub-agent-linux -o /usr/local/bin/ithub-agent &amp;&amp; chmod +x /usr/local/bin/ithub-agent &amp;&amp; ithub-agent enroll --server {base} --token {t} &amp;&amp; ithub-agent</pre>
-<h3>Windows (PowerShell as Administrator)</h3><pre>New-Item -ItemType Directory -Force "$env:ProgramFiles\ithub" | Out-Null; iwr {base}/dl/ithub-agent-windows.exe -OutFile "$env:ProgramFiles\ithub\ithub-agent.exe"; &amp; "$env:ProgramFiles\ithub\ithub-agent.exe" enroll --server {base} --token {t}; &amp; "$env:ProgramFiles\ithub\ithub-agent.exe"</pre></section>"#
+<h3>Linux (as root)</h3><pre>curl -fsSL https://deskhand.sh/dl/deskhand-agent-linux -o /usr/local/bin/deskhand-agent &amp;&amp; chmod +x /usr/local/bin/deskhand-agent &amp;&amp; deskhand-agent enroll --server {base} --token {t} &amp;&amp; deskhand-agent</pre>
+<h3>Windows (PowerShell as Administrator)</h3><pre>New-Item -ItemType Directory -Force "$env:ProgramFiles\Deskhand" | Out-Null; iwr https://deskhand.sh/dl/deskhand-agent-windows.exe -OutFile "$env:ProgramFiles\Deskhand\deskhand-agent.exe"; &amp; "$env:ProgramFiles\Deskhand\deskhand-agent.exe" enroll --server {base} --token {t}; &amp; "$env:ProgramFiles\Deskhand\deskhand-agent.exe"</pre></section>"#
         );
     }
     let _ = write!(

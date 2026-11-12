@@ -16,7 +16,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-pub const COOKIE: &str = "ithub_session";
+pub const COOKIE: &str = "deskhand_session";
 const SESSION_SECS: i64 = 7 * 24 * 3600;
 
 pub fn hash_password(password: &str) -> String {
@@ -37,7 +37,7 @@ fn verify_password(password: &str, hash: &str) -> bool {
 /// A fixed hash to check against for unknown user names, so they take as long as known ones.
 fn dummy_hash() -> &'static str {
     static H: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    H.get_or_init(|| hash_password("ithub-dummy-password"))
+    H.get_or_init(|| hash_password("deskhand-dummy-password"))
 }
 
 fn cookie_value(headers: &HeaderMap) -> Option<String> {
@@ -153,7 +153,7 @@ const PASSWORD_FORM: &str = r#"<form method="post" action="/login">
 <button>Sign in</button>
 </form>"#;
 
-/// Password sign-in is on unless ITHUB_PASSWORD_LOGIN=0 and some SSO provider is set up,
+/// Password sign-in is on unless DESKHAND_PASSWORD_LOGIN=0 and some SSO provider is set up,
 /// so turning it off can never lock everyone out.
 pub fn password_login(app: &App) -> bool {
     app.password_login || app.sso.providers.is_empty()
@@ -387,8 +387,8 @@ pub async fn sso_callback(
             };
             message(
                 StatusCode::FORBIDDEN,
-                "No ithub account yet",
-                &format!("<p>You signed in to {} as <b>{}</b>, but no ithub user matches.</p>{email}", kind.label(), ui::esc(&id.display)),
+                "No deskhand account yet",
+                &format!("<p>You signed in to {} as <b>{}</b>, but no deskhand user matches.</p>{email}", kind.label(), ui::esc(&id.display)),
             )
         }
         Err(e) => {

@@ -1,4 +1,4 @@
-> **ithub fork.** This copy of voxl is modified for ithub: VP9 (libvpx) by default with an
+> **Deskhand fork.** This copy of voxl is modified for Deskhand: VP9 (libvpx) by default with an
 > OpenH264 fallback instead of x264, Rust colour conversion instead of libyuv, and a
 > Rust PulseAudio client instead of libpulse, so it links no shared libraries.
 > Upstream: https://github.com/tembo/voxl (MIT, see LICENSE).

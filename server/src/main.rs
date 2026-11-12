@@ -1,15 +1,15 @@
-//! ithub server: agents enroll with a token and dial in over WebSocket, users sign in to
+//! deskhand server: agents enroll with a token and dial in over WebSocket, users sign in to
 //! the dashboard, and `/d/{id}/` proxies the browser to that device's voxl through the
 //! agent's tunnel.
 //!
 //! Settings come from the environment:
-//! - `ITHUB_ADDR` (default `0.0.0.0:8080`)
-//! - `ITHUB_DB` (default `./ithub.db`): the SQLite database
-//! - `ITHUB_ADMIN_PASSWORD` (optional): with no users yet, creates `admin` with this
+//! - `DESKHAND_ADDR` (default `0.0.0.0:8080`)
+//! - `DESKHAND_DB` (default `./deskhand.db`): the SQLite database
+//! - `DESKHAND_ADMIN_PASSWORD` (optional): with no users yet, creates `admin` with this
 //!   password; without it the server prints a one-time setup link
-//! - `ITHUB_TRUST_PROXY=1`: believe X-Forwarded-Proto/-For from a TLS proxy in front
-//! - `ITHUB_PUBLIC_URL`, `ITHUB_ENTRA_*`, `ITHUB_GOOGLE_*`, `ITHUB_GITHUB_*`,
-//!   `ITHUB_SSO_AUTO_PROVISION`, `ITHUB_PASSWORD_LOGIN`: single sign-on (docs/sso.md)
+//! - `DESKHAND_TRUST_PROXY=1`: believe X-Forwarded-Proto/-For from a TLS proxy in front
+//! - `DESKHAND_PUBLIC_URL`, `DESKHAND_ENTRA_*`, `DESKHAND_GOOGLE_*`, `DESKHAND_GITHUB_*`,
+//!   `DESKHAND_SSO_AUTO_PROVISION`, `DESKHAND_PASSWORD_LOGIN`: single sign-on (docs/sso.md)
 
 mod auth;
 mod db;
@@ -29,7 +29,7 @@ use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use db::{Db, Role};
 use futures_util::{SinkExt, StreamExt};
-use ithub_proto::{AgentMsg, EnrollRequest, EnrollResponse, ServerMsg, StreamKind};
+use deskhand_proto::{AgentMsg, EnrollRequest, EnrollResponse, ServerMsg, StreamKind};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -55,7 +55,7 @@ pub struct App {
     pub setup_token: Mutex<Option<String>>,
     pub login_limit: auth::RateLimit,
     pub sso: sso::Sso,
-    /// ITHUB_PASSWORD_LOGIN, which only takes effect with an SSO provider set up
+    /// DESKHAND_PASSWORD_LOGIN, which only takes effect with an SSO provider set up
     /// (see [`auth::password_login`]).
     pub password_login: bool,
     pub agents: Mutex<HashMap<String, Agent>>,
@@ -104,19 +104,19 @@ pub fn same(a: &str, b: &str) -> bool {
 #[tokio::main]
 async fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    let addr = std::env::var("ITHUB_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());
-    let db_path = std::env::var("ITHUB_DB").unwrap_or_else(|_| "ithub.db".into());
+    let addr = std::env::var("DESKHAND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());
+    let db_path = std::env::var("DESKHAND_DB").unwrap_or_else(|_| "deskhand.db".into());
     let db = Db::open(&db_path).unwrap_or_else(|e| {
         eprintln!("can't open the database {db_path}: {e}");
         std::process::exit(2);
     });
     let mut setup_token = None;
     if db.user_count().unwrap_or(0) == 0 {
-        match std::env::var("ITHUB_ADMIN_PASSWORD").ok().filter(|p| !p.is_empty()) {
+        match std::env::var("DESKHAND_ADMIN_PASSWORD").ok().filter(|p| !p.is_empty()) {
             Some(pw) => {
                 db.add_user("admin", &auth::hash_password(&pw), Role::Admin, now())
                     .expect("create admin");
-                log::info!("created user admin from ITHUB_ADMIN_PASSWORD");
+                log::info!("created user admin from DESKHAND_ADMIN_PASSWORD");
             }
             None => {
                 let t = random_hex(16);
@@ -128,11 +128,11 @@ async fn main() {
     }
     let app = Arc::new(App {
         db,
-        trust_proxy: std::env::var("ITHUB_TRUST_PROXY").is_ok_and(|v| v == "1"),
+        trust_proxy: std::env::var("DESKHAND_TRUST_PROXY").is_ok_and(|v| v == "1"),
         setup_token: Mutex::new(setup_token),
         login_limit: Default::default(),
         sso: sso::Sso::from_env(),
-        password_login: std::env::var("ITHUB_PASSWORD_LOGIN").map_or(true, |v| v != "0"),
+        password_login: std::env::var("DESKHAND_PASSWORD_LOGIN").map_or(true, |v| v != "0"),
         agents: Mutex::default(),
         pending: Mutex::default(),
         next_conn: AtomicU64::new(1),
@@ -181,7 +181,7 @@ async fn main() {
         .layer(axum::middleware::from_fn(auth::check_origin))
         .with_state(app);
     let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind");
-    log::info!("ithub server on http://{addr}");
+    log::info!("deskhand server on http://{addr}");
     axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .expect("serve");

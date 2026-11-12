@@ -4,7 +4,7 @@ name = "voxl-server"
 version = "0.3.4"
 edition = "2021"
 license = "MIT"
-# ithub fork: VP9 (libvpx) + OpenH264 instead of x264, no shared libraries.
+# Deskhand fork: VP9 (libvpx) + OpenH264 instead of x264, no shared libraries.
 publish = false
 description = "Low-latency desktop streaming for the browser: an X11 display, a Mac's screen or a Windows desktop as H.264 over a WebSocket"
 repository = "https://github.com/tembo/voxl"

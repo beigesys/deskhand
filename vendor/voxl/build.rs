@@ -6,9 +6,20 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The libvpx release built when VPX_SRC doesn't point at a source tree.
-const LIBVPX_TAG: &str = "v1.17.0";
-const LIBVPX_GIT: &str = "https://chromium.googlesource.com/webm/libvpx";
+/// libvpx's source: VPX_SRC, else the vendor/libvpx submodule (pinned to v1.17.0) next
+/// to this crate. Nothing is downloaded at build time.
+fn libvpx_src() -> PathBuf {
+    let src = match std::env::var("VPX_SRC") {
+        Ok(s) => PathBuf::from(s),
+        Err(_) => PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../libvpx"),
+    };
+    assert!(
+        src.join("configure").exists(),
+        "libvpx source not found at {}; run `git submodule update --init` or set VPX_SRC",
+        src.display()
+    );
+    src
+}
 
 fn main() {
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
@@ -43,24 +54,8 @@ fn build_libvpx(out: &Path) -> Vec<PathBuf> {
     let prefix = out.join("libvpx");
     let lib = prefix.join("lib/libvpx.a");
     if !lib.exists() {
-        let src = match std::env::var("VPX_SRC") {
-            Ok(s) => PathBuf::from(s),
-            Err(_) => {
-                let s = out.join("libvpx-src");
-                if !s.join("configure").exists() {
-                    let _ = std::fs::remove_dir_all(&s);
-                    run(Command::new("git").args([
-                        "clone",
-                        "--depth=1",
-                        "--branch",
-                        LIBVPX_TAG,
-                        LIBVPX_GIT,
-                    ])
-                    .arg(&s));
-                }
-                s
-            }
-        };
+        let src = libvpx_src();
+        println!("cargo:rerun-if-changed={}", src.join("vpx/vpx_encoder.h").display());
         let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap();
         let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
         let target = match (arch.as_str(), os.as_str()) {

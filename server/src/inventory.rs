@@ -7,7 +7,7 @@ use crate::{now, send_to_agent, Shared};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
-use ithub_proto::{Inventory, ServerMsg};
+use deskhand_proto::{Inventory, ServerMsg};
 use std::fmt::Write;
 
 fn gib(bytes: u64) -> String {

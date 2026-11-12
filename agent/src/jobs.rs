@@ -2,7 +2,7 @@
 //! out on a channel that outlives the control socket, so a job that finishes while the
 //! agent is reconnecting still reports.
 
-use ithub_proto::{Action, AgentMsg, JobStatus, OutStream, ScriptShell, OUTPUT_CAP};
+use deskhand_proto::{Action, AgentMsg, JobStatus, OutStream, ScriptShell, OUTPUT_CAP};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -79,7 +79,7 @@ async fn script(
     out: &mpsc::UnboundedSender<AgentMsg>,
 ) -> Result<AgentMsg, String> {
     let ext = interpreter(shell, "").2;
-    let path = std::env::temp_dir().join(format!("ithub-job-{run_id}-{}.{ext}", crate::random_hex(4)));
+    let path = std::env::temp_dir().join(format!("deskhand-job-{run_id}-{}.{ext}", crate::random_hex(4)));
     // cmd wants CRLF; the rest take the body as written.
     let text = if shell == ScriptShell::Cmd { body.replace("\r\n", "\n").replace('\n', "\r\n") } else { body.to_owned() };
     std::fs::write(&path, text).map_err(|e| format!("writing the script: {e}"))?;
@@ -210,7 +210,7 @@ impl Output {
     fn finish(self) -> String {
         let mut s = String::from_utf8_lossy(&self.kept).into_owned();
         if self.dropped > 0 {
-            s.push_str(&format!("\n[ithub: {} more bytes not kept]", self.dropped));
+            s.push_str(&format!("\n[deskhand: {} more bytes not kept]", self.dropped));
         }
         s
     }
@@ -314,11 +314,11 @@ impl Tree {
 }
 
 mod action {
-    use ithub_proto::Action;
+    use deskhand_proto::Action;
 
-    /// `ITHUB_AGENT_DRY_RUN_POWER=1`: log power actions instead of doing them (testing).
+    /// `DESKHAND_AGENT_DRY_RUN_POWER=1`: log power actions instead of doing them (testing).
     fn dry_run() -> bool {
-        std::env::var("ITHUB_AGENT_DRY_RUN_POWER").is_ok_and(|v| v == "1")
+        std::env::var("DESKHAND_AGENT_DRY_RUN_POWER").is_ok_and(|v| v == "1")
     }
 
     /// Carries out the action; the text on success says what was done.

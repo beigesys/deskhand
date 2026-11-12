@@ -467,7 +467,7 @@ impl Db {
 
     /// Saves a snapshot, updates the device's summary columns and keeps the newest
     /// [`INVENTORY_HISTORY`].
-    pub fn save_inventory(&self, device: &str, inv: &ithub_proto::Inventory, now: i64) -> R<()> {
+    pub fn save_inventory(&self, device: &str, inv: &deskhand_proto::Inventory, now: i64) -> R<()> {
         let json = serde_json::to_string(inv).expect("inventory json");
         let mut c = self.c();
         let tx = c.transaction()?;
@@ -494,7 +494,7 @@ impl Db {
     }
 
     /// The newest snapshot and when the server got it.
-    pub fn inventory(&self, device: &str) -> R<Option<(i64, ithub_proto::Inventory)>> {
+    pub fn inventory(&self, device: &str) -> R<Option<(i64, deskhand_proto::Inventory)>> {
         let row: Option<(i64, String)> = self
             .c()
             .query_row(
@@ -507,7 +507,7 @@ impl Db {
     }
 
     /// Every device's newest snapshot, by device id, for the CSV export.
-    pub fn latest_inventories(&self) -> R<std::collections::HashMap<String, ithub_proto::Inventory>> {
+    pub fn latest_inventories(&self) -> R<std::collections::HashMap<String, deskhand_proto::Inventory>> {
         let c = self.c();
         let mut s = c.prepare(
             "SELECT device_id, json FROM inventory WHERE id IN (SELECT max(id) FROM inventory GROUP BY device_id)",

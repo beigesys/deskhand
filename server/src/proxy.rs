@@ -5,7 +5,7 @@
 use crate::auth::require;
 use crate::db::Role;
 use crate::{now, open_stream, Shared};
-use ithub_proto::StreamKind;
+use deskhand_proto::StreamKind;
 use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{Request, State};

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cross-builds static ithub-agent.exe and ithub-server.exe from Linux with mingw-w64.
+# Cross-builds static deskhand-agent.exe and deskhand-server.exe from Linux with mingw-w64.
 # The .exe files import only Windows DLLs (msvcrt.dll included, which ships with Windows).
 # libvpx and Opus come from vcpkg; OpenH264 is compiled by its crate; libstdc++ and
 # winpthread are linked statically (-static, in .cargo/config.toml).
@@ -16,11 +16,11 @@ target=x86_64-pc-windows-gnu
 
 "$VCPKG_ROOT/vcpkg" install libvpx opus --triplet "$VCPKGRS_TRIPLET"
 cd "$root"
-cargo build --release --target "$target" -p ithub-agent -p ithub-server
+cargo build --release --target "$target" -p deskhand-agent -p deskhand-server
 
 # Same rule as CI: nothing but Windows DLLs.
 bad=0
-for exe in ithub-agent.exe ithub-server.exe; do
+for exe in deskhand-agent.exe deskhand-server.exe; do
 	f=${CARGO_TARGET_DIR:-target}/$target/release/$exe
 	dlls=$(x86_64-w64-mingw32-objdump -p "$f" | sed -n 's/.*DLL Name: //p' | sort -fu)
 	echo "$exe imports: $(echo $dlls)"
