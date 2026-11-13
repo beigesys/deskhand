@@ -681,6 +681,7 @@ dependencies = [
  "log",
  "oauth2",
  "openidconnect",
+ "reqwest",
  "rusqlite",
  "rust-embed",
  "serde",

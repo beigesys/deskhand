@@ -48,6 +48,10 @@ export interface Device {
 	model: string | null;
 	logged_in_users: string[];
 	attention: Attention[];
+	/** The agent version it last connected with (null if unknown). */
+	agent_version: string | null;
+	/** The agent's version differs from the server's. */
+	agent_outdated: boolean;
 }
 
 export interface Inventory {
@@ -115,11 +119,31 @@ export interface EnrollToken {
 	uses: number;
 }
 
+export interface AgentBinary {
+	platform: string;
+	file: string;
+	present: boolean;
+	size: number | null;
+	/** `cached` (in the agents directory), `fetched` (from the release), `fetching`, `unavailable`. */
+	status: 'cached' | 'fetched' | 'fetching' | 'unavailable';
+	detail: string | null;
+}
+
+export interface AgentDownloads {
+	/** The address install commands use, if the server can tell. */
+	server: string | null;
+	dir: string;
+	binaries: AgentBinary[];
+	server_version: string;
+}
+
 export interface NewEnrollToken {
+	id: number;
 	token: string;
 	server: string;
 	linux: string;
 	windows: string;
+	binaries: AgentBinary[];
 }
 
 export interface Identity {

@@ -18,6 +18,9 @@ pub enum AgentMsg {
         os: String,
         /// voxl's password, which the server sends as a Bearer token on each request.
         voxl_token: String,
+        /// The agent's version (`CARGO_PKG_VERSION`); empty from agents older than this field.
+        #[serde(default)]
+        version: String,
     },
     /// What the device is: sent after Hello, every few hours, and when asked.
     Inventory { inventory: Box<Inventory> },

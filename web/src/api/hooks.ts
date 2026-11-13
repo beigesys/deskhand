@@ -10,6 +10,7 @@ import {
 import { toast } from 'sonner';
 import { api, ApiError } from './client';
 import type {
+	AgentDownloads,
 	AuditRow,
 	AuthInfo,
 	Device,
@@ -36,6 +37,7 @@ export const keys = {
 	device: (id: string) => ['device', id] as const,
 	groups: ['groups'] as const,
 	tokens: ['enroll-tokens'] as const,
+	agentDownloads: ['agent-downloads'] as const,
 	users: ['users'] as const,
 	audit: ['audit'] as const,
 	scripts: ['scripts'] as const,
@@ -114,6 +116,15 @@ export const useAudit = (f: { action?: string; q?: string; user?: string; device
 	usePaged<AuditRow>(keys.audit, '/audit', f, { limit: 100 });
 
 /** Whether SSO is on, from the users list (admins only). */
+/** Which agent builds the server can hand out (admin only). Polls while any is being fetched. */
+export function useAgentDownloads() {
+	return useQuery({
+		queryKey: keys.agentDownloads,
+		queryFn: () => api.get<AgentDownloads>('/agent-downloads'),
+		refetchInterval: (q) => (q.state.data?.binaries.some((b) => b.status === 'fetching') ? 3000 : false),
+	});
+}
+
 export function useSsoEnabled() {
 	return useQuery({
 		queryKey: [...keys.users, 'sso'],

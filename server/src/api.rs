@@ -40,6 +40,7 @@ pub fn router() -> Router<Shared> {
         .route("/groups", get(groups).post(add_group))
         .route("/groups/{id}", delete(delete_group))
         .route("/enroll-tokens", get(enroll_tokens).post(add_enroll_token))
+        .route("/agent-downloads", get(agent_downloads))
         .route("/enroll-tokens/{id}", delete(revoke_enroll_token))
         .route("/users", get(users).post(add_user))
         .route("/users/{id}", delete(delete_user))
@@ -314,6 +315,10 @@ pub struct DeviceOut {
     /// Why the device needs a look: `reboot_pending`, `firewall_off`, `low_disk`,
     /// `av_off`, `offline_7d`.
     attention: Vec<&'static str>,
+    /// The agent version it last connected with (null if unknown).
+    agent_version: Option<String>,
+    /// The agent's version differs from the server's.
+    agent_outdated: bool,
 }
 
 fn attention(flags: &str, online: bool, last_seen: i64, now: i64) -> Vec<&'static str> {
@@ -352,6 +357,8 @@ fn device_out(d: crate::db::DeviceRow, since: Option<i64>, now: i64) -> DeviceOu
         online_since: since,
         last_seen: d.last_seen,
         last_boot: d.inv_last_boot,
+        agent_outdated: !d.agent_version.is_empty() && d.agent_version != env!("CARGO_PKG_VERSION"),
+        agent_version: Some(d.agent_version).filter(|v| !v.is_empty()),
     }
 }
 
@@ -661,10 +668,33 @@ struct TokenBody {
 
 #[derive(Serialize)]
 struct NewToken {
+    id: i64,
     token: String,
     server: String,
     linux: String,
     windows: String,
+    /// Which agent builds this server can hand out, so the page can warn about gaps.
+    binaries: Vec<crate::downloads::Binary>,
+}
+
+#[derive(Serialize)]
+struct AgentDownloads {
+    /// The address install commands use, if this server can tell.
+    server: Option<String>,
+    dir: String,
+    binaries: Vec<crate::downloads::Binary>,
+    /// Agents on any other version are flagged outdated.
+    server_version: &'static str,
+}
+
+async fn agent_downloads(State(app): State<Shared>, headers: HeaderMap) -> Api<AgentDownloads> {
+    need(&app, &headers, Role::Admin)?;
+    Ok(Json(AgentDownloads {
+        server: crate::downloads::install_base(app.public_url.as_deref(), app.trust_proxy, &headers),
+        dir: app.builds.dir.display().to_string(),
+        binaries: app.builds.binaries(),
+        server_version: env!("CARGO_PKG_VERSION"),
+    }))
 }
 
 async fn add_enroll_token(State(app): State<Shared>, headers: HeaderMap, Json(b): Json<TokenBody>) -> Api<NewToken> {
@@ -678,7 +708,7 @@ async fn add_enroll_token(State(app): State<Shared>, headers: HeaderMap, Json(b)
     let max_uses = b.max_uses.clamp(1, 100_000);
     let token = random_hex(20);
     let now = now();
-    app.db.add_enroll_token(&token, b.group_id, now + hours * 3600, max_uses, now)?;
+    let id = app.db.add_enroll_token(&token, b.group_id, now + hours * 3600, max_uses, now)?;
     app.db.audit(
         now,
         Some(user.id),
@@ -688,12 +718,10 @@ async fn add_enroll_token(State(app): State<Shared>, headers: HeaderMap, Json(b)
     );
     let server = base_url(&app, &headers);
     Ok(Json(NewToken {
-        linux: format!(
-            "curl -fsSL https://deskhand.sh/dl/deskhand-agent-linux -o /usr/local/bin/deskhand-agent && chmod +x /usr/local/bin/deskhand-agent && deskhand-agent enroll --server {server} --token {token} && deskhand-agent"
-        ),
-        windows: format!(
-            r#"New-Item -ItemType Directory -Force "$env:ProgramFiles\Deskhand" | Out-Null; iwr https://deskhand.sh/dl/deskhand-agent-windows.exe -OutFile "$env:ProgramFiles\Deskhand\deskhand-agent.exe"; & "$env:ProgramFiles\Deskhand\deskhand-agent.exe" enroll --server {server} --token {token}; & "$env:ProgramFiles\Deskhand\deskhand-agent.exe""#
-        ),
+        linux: crate::downloads::linux_command(&server, &token),
+        windows: crate::downloads::windows_command(&server, &token),
+        binaries: app.builds.binaries(),
+        id,
         server,
         token,
     }))

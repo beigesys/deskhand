@@ -150,6 +150,9 @@ CREATE INDEX audit_action ON audit(action, id);
 CREATE INDEX audit_user ON audit(user_id, id);
 CREATE INDEX audit_device ON audit(device_id, id);
 CREATE INDEX job_runs_job_id ON job_runs(job_id, id);
+"#, r#"
+-- The agent version each device last connected with ('' if unknown).
+ALTER TABLE devices ADD COLUMN agent_version TEXT NOT NULL DEFAULT '';
 "#];
 
 /// The first private IPv4 address on a real interface (not loopback, Docker or a bridge).
@@ -201,6 +204,8 @@ pub struct DeviceRow {
     pub users: String,
     /// Comma-separated inventory flags.
     pub attention: String,
+    /// The agent version it last connected with; empty if unknown.
+    pub agent_version: String,
 }
 
 /// What a device list asks for.
@@ -586,7 +591,8 @@ impl Db {
         };
         let mut s = c.prepare(&format!(
             "SELECT d.id, d.name, d.hostname, d.os, d.group_id, g.name, d.last_seen, d.inv_os, d.inv_os_version,
-                    d.inv_last_boot, d.inv_ip, d.inv_public_ip, d.inv_serial, d.inv_model, d.inv_users, d.attention
+                    d.inv_last_boot, d.inv_ip, d.inv_public_ip, d.inv_serial, d.inv_model, d.inv_users, d.attention,
+                    d.agent_version
              FROM devices d LEFT JOIN groups g ON g.id = d.group_id
              WHERE {filter}
                AND (?10 IS NULL OR d.name > ?10 COLLATE NOCASE OR (d.name = ?10 COLLATE NOCASE AND d.id > ?11))
@@ -612,6 +618,7 @@ impl Db {
                     model: r.get(13)?,
                     users: r.get(14)?,
                     attention: r.get(15)?,
+                    agent_version: r.get(16)?,
                 })
             },
         )?;
@@ -736,6 +743,11 @@ impl Db {
         Ok(())
     }
 
+    pub fn set_agent_version(&self, id: &str, version: &str) -> R<()> {
+        self.c().execute("UPDATE devices SET agent_version = ?2 WHERE id = ?1", params![id, version])?;
+        Ok(())
+    }
+
     pub fn rename_device(&self, id: &str, name: &str) -> R<usize> {
         self.c().execute("UPDATE devices SET name = ?2 WHERE id = ?1", params![id, name])
     }
@@ -750,12 +762,13 @@ impl Db {
 
     // --- enrollment tokens ---
 
-    pub fn add_enroll_token(&self, token: &str, group: Option<i64>, expires: i64, max_uses: i64, now: i64) -> R<()> {
-        self.c().execute(
+    pub fn add_enroll_token(&self, token: &str, group: Option<i64>, expires: i64, max_uses: i64, now: i64) -> R<i64> {
+        let c = self.c();
+        c.execute(
             "INSERT INTO enroll_tokens (token_hash, group_id, expires, max_uses, created) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![token_hash(token), group, expires, max_uses, now],
         )?;
-        Ok(())
+        Ok(c.last_insert_rowid())
     }
 
     pub fn enroll_tokens(&self, now: i64) -> R<Vec<EnrollToken>> {

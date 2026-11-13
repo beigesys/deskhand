@@ -1,16 +1,17 @@
 import * as React from 'react';
 import { Link } from '@tanstack/react-router';
-import { Check, Copy, Plus, Trash2, Unlink } from 'lucide-react';
+import { AlertTriangle, Check, Copy, Plus, Trash2, Unlink } from 'lucide-react';
 import { api } from '@/api/client';
-import { keys, useAction, useAudit, useCan, useGroups, useMe, useSsoEnabled, useTokens, useUsers } from '@/api/hooks';
-import type { Device, Group, NewEnrollToken, Role, User } from '@/api/types';
+import { keys, useAction, useAgentDownloads, useAudit, useCan, useGroups, useMe, useSsoEnabled, useTokens, useUsers } from '@/api/hooks';
+import type { AgentBinary, Device, Group, NewEnrollToken, Role, User } from '@/api/types';
 import { AsyncCombobox, deviceOption, groupOption, NO_GROUP, userOption, type Option } from '@/components/ui/async-combobox';
 import { LoadMore } from '@/components/ui/load-more';
 import { SearchBox, useDebounce } from '@/components/ui/search';
 import { Button } from '@/components/ui/button';
 import { Confirm } from '@/components/ui/confirm';
-import { Badge, Empty, PageHeader, Panel } from '@/components/ui/display';
+import { Badge, Empty, PageHeader } from '@/components/ui/display';
 import { Field, Input, Select } from '@/components/ui/form';
+import { FormDialog, useNewRow } from '@/components/ui/form-dialog';
 import { Table, Td, Th, Tr } from '@/components/ui/table';
 import { ago, datetime, until } from '@/lib/utils';
 
@@ -25,8 +26,9 @@ export function GroupsPage() {
 	const [text, setText] = React.useState('');
 	const q = useDebounce(text);
 	const groups = useGroups(q);
+	const [adding, setAdding] = React.useState(false);
+	const fresh = useNewRow<number>();
 	const [deleting, setDeleting] = React.useState<{ id: number; name: string } | null>(null);
-	const add = useAction((name: string) => api.post('/groups', { name }), { invalidate: [keys.groups], success: 'Group added' });
 	const del = useAction((id: number) => api.del(`/groups/${id}`), {
 		invalidate: [keys.groups, keys.devices],
 		success: 'Group deleted',
@@ -34,62 +36,63 @@ export function GroupsPage() {
 	});
 	return (
 		<AdminOnly>
-			<PageHeader title="Groups" sub="Group devices by site, team or role. Jobs and enrollment tokens can target a group." />
-			<div className="grid gap-3 lg:grid-cols-[1fr_320px]">
-				<div>
-					<SearchBox value={text} onChange={setText} placeholder="Search groups…" />
-					<div className="rounded border border-line bg-surface">
-					{!groups.items.length ? (
-						<Empty>{groups.isLoading ? 'Loading…' : q ? 'No groups match.' : 'No groups yet.'}</Empty>
-					) : (
-						<Table>
-							<thead>
-								<tr>
-									<Th>Name</Th>
-									<Th>Devices</Th>
-									<Th className="w-10" />
-								</tr>
-							</thead>
-							<tbody>
-								{groups.items.map((g) => (
-									<Tr key={g.id}>
-										<Td>
-											<Link to="/devices" search={{ group: String(g.id) }} className="font-medium hover:text-signal">
-												{g.name}
-											</Link>
-										</Td>
-										<Td className="font-mono text-xs tabular">{g.devices}</Td>
-										<Td>
-											<Button size="icon" variant="ghost" aria-label={`Delete ${g.name}`} onClick={() => setDeleting(g)}>
-												<Trash2 />
-											</Button>
-										</Td>
-									</Tr>
-								))}
-							</tbody>
-						</Table>
-					)}
-					<LoadMore hasNextPage={!!groups.hasNextPage} isFetchingNextPage={groups.isFetchingNextPage} fetchNextPage={groups.fetchNextPage} />
-					</div>
-				</div>
-				<Panel title="Add a group">
-					<form
-						className="grid gap-2"
-						onSubmit={(e) => {
-							e.preventDefault();
-							const f = e.currentTarget;
-							add.mutate(String(new FormData(f).get('name')), { onSuccess: () => f.reset() });
-						}}
-					>
-						<Field label="Name">
-							<Input name="name" required maxLength={100} />
-						</Field>
-						<Button type="submit" variant="primary">
-							<Plus /> Add group
-						</Button>
-					</form>
-				</Panel>
+			<PageHeader
+				title="Groups"
+				sub="Group devices by site, team or role. Jobs and enrollment tokens can target a group."
+				primary={
+					<Button variant="primary" onClick={() => setAdding(true)}>
+						<Plus /> Add group
+					</Button>
+				}
+			/>
+			<SearchBox value={text} onChange={setText} placeholder="Search groups…" />
+			<div className="rounded border border-line bg-surface">
+				{!groups.items.length ? (
+					<Empty>{groups.isLoading ? 'Loading…' : q ? 'No groups match.' : 'No groups yet. Add one to sort devices by site or team.'}</Empty>
+				) : (
+					<Table>
+						<thead>
+							<tr>
+								<Th>Name</Th>
+								<Th>Devices</Th>
+								<Th className="w-10" />
+							</tr>
+						</thead>
+						<tbody>
+							{groups.items.map((g) => (
+								<Tr key={g.id} className={fresh.rowClass(g.id)}>
+									<Td>
+										<Link to="/devices" search={{ group: String(g.id) }} className="font-medium hover:text-signal">
+											{g.name}
+										</Link>
+									</Td>
+									<Td className="font-mono text-xs tabular">{g.devices}</Td>
+									<Td>
+										<Button size="icon" variant="ghost" aria-label={`Delete ${g.name}`} onClick={() => setDeleting(g)}>
+											<Trash2 />
+										</Button>
+									</Td>
+								</Tr>
+							))}
+						</tbody>
+					</Table>
+				)}
+				<LoadMore hasNextPage={!!groups.hasNextPage} isFetchingNextPage={groups.isFetchingNextPage} fetchNextPage={groups.fetchNextPage} />
 			</div>
+			<FormDialog
+				open={adding}
+				onOpenChange={setAdding}
+				title="Add group"
+				submitLabel="Add group"
+				success="Group added"
+				invalidate={[keys.groups]}
+				action={(f) => api.post<{ id: number }>('/groups', { name: String(f.get('name') ?? '') })}
+				onCreated={(r) => fresh.mark(r.id)}
+			>
+				<Field label="Name">
+					<Input name="name" required maxLength={100} autoFocus placeholder="e.g. Clinic · Main" />
+				</Field>
+			</FormDialog>
 			<Confirm
 				open={!!deleting}
 				onOpenChange={(v) => !v && setDeleting(null)}
@@ -130,111 +133,166 @@ function CopyBlock({ label, text }: { label: string; text: string }) {
 	);
 }
 
+const STATUS_TEXT: Record<AgentBinary['status'], string> = {
+	cached: 'ready',
+	fetched: 'ready (from release)',
+	fetching: 'downloading…',
+	unavailable: 'unavailable',
+};
+
+/** Which agent builds this server can hand to the install commands. */
+function AgentBuilds({ binaries }: { binaries: AgentBinary[] }) {
+	return (
+		<ul className="grid gap-1 text-[13px]">
+			{binaries.map((b) => (
+				<li key={b.file} className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+					<span
+						className={
+							b.present ? 'size-2 rounded-[1px] bg-ok' : b.status === 'fetching' ? 'size-2 rounded-[1px] bg-run' : 'size-2 rounded-[1px] bg-warn'
+						}
+						aria-hidden
+					/>
+					<span className="min-w-36">{b.platform}</span>
+					<span className={b.present ? 'text-muted' : 'text-warn'}>{STATUS_TEXT[b.status]}</span>
+					{b.detail && !b.present && <span className="w-full pl-4 text-xs text-muted break-words">{b.detail}</span>}
+				</li>
+			))}
+		</ul>
+	);
+}
+
 export function EnrollPage() {
 	const tokens = useTokens();
+	const downloads = useAgentDownloads();
 	const [group, setGroup] = React.useState<string | null>(null);
-	const [created, setCreated] = React.useState<NewEnrollToken | null>(null);
-	const add = useAction(
-		(b: { group_id: number | null; hours: number; max_uses: number }) => api.post<NewEnrollToken>('/enroll-tokens', b),
-		{ invalidate: [keys.tokens], success: 'Token created', onSuccess: (t) => setCreated(t) },
-	);
+	const [adding, setAdding] = React.useState(false);
+	const fresh = useNewRow<number>();
 	const revoke = useAction((id: number) => api.del(`/enroll-tokens/${id}`), { invalidate: [keys.tokens], success: 'Revoked' });
+	const missing = downloads.data?.binaries.filter((b) => !b.present) ?? [];
 	return (
 		<AdminOnly>
-			<PageHeader title="Enrollment" sub="Tokens let new machines join. Each machine trades one for its own secret." />
-			<div className="grid gap-3 lg:grid-cols-[360px_1fr]">
-				<Panel title="Create a token">
-					<form
-						className="grid gap-3"
-						onSubmit={(e) => {
-							e.preventDefault();
-							const f = new FormData(e.currentTarget);
-							add.mutate({
-								group_id: group && group !== 'none' ? Number(group) : null,
-								hours: Number(f.get('hours')),
-								max_uses: Number(f.get('max_uses')),
-							});
+			<PageHeader
+				title="Enrollment"
+				sub="Tokens let new machines join. Each machine trades one for its own secret."
+				primary={
+					<Button
+						variant="primary"
+						onClick={() => {
+							setGroup(null);
+							setAdding(true);
 						}}
 					>
-						<Field label="Group">
-							<AsyncCombobox<Group>
-								endpoint="/groups"
-								toOption={groupOption}
-								extra={[NO_GROUP]}
-								value={group ?? 'none'}
-								onChange={setGroup}
-								searchPlaceholder="Search groups…"
-								aria-label="Group"
-							/>
-						</Field>
-						<Field label="Expires in">
-							<Select name="hours" defaultValue="24">
-								<option value="1">1 hour</option>
-								<option value="24">1 day</option>
-								<option value="168">7 days</option>
-								<option value="720">30 days</option>
-							</Select>
-						</Field>
-						<Field label="Max uses">
-							<Input name="max_uses" type="number" min={1} max={100000} defaultValue={1} required />
-						</Field>
-						<Button type="submit" variant="primary" disabled={add.isPending}>
-							<Plus /> Create token
-						</Button>
-					</form>
-				</Panel>
-				<div className="grid content-start gap-3">
-					{created && (
-						<Panel
-							title="New token: shown once"
-							className="border-signal/60"
-							actions={
-								<Button size="sm" variant="ghost" onClick={() => setCreated(null)}>
-									Done
-								</Button>
-							}
-						>
-							<div className="grid gap-3">
-								<CopyBlock label="Token" text={created.token} />
-								<CopyBlock label="Linux (as root)" text={created.linux} />
-								<CopyBlock label="Windows (PowerShell as Administrator)" text={created.windows} />
-							</div>
-						</Panel>
-					)}
-					<Panel title="Active tokens" bodyClassName="p-0">
-						{!tokens.items.length ? (
-							<Empty>None.</Empty>
-						) : (
-							<Table>
-								<thead>
-									<tr>
-										<Th>Group</Th>
-										<Th>Used</Th>
-										<Th>Expires</Th>
-										<Th className="w-20" />
-									</tr>
-								</thead>
-								<tbody>
-									{tokens.items.map((t) => (
-										<Tr key={t.id}>
-											<Td>{t.group ?? <span className="text-muted">No group</span>}</Td>
-											<Td className="font-mono text-xs tabular">
-												{t.uses} / {t.max_uses}
-											</Td>
-											<Td className="text-muted">{until(t.expires)}</Td>
-											<Td>
-												<Button size="sm" variant="danger" onClick={() => revoke.mutate(t.id)}>
-													Revoke
-												</Button>
-											</Td>
-										</Tr>
-									))}
-								</tbody>
-							</Table>
-						)}
-					</Panel>
+						<Plus /> New token
+					</Button>
+				}
+			/>
+			{downloads.data && missing.length > 0 && (
+				<div className="mb-3 flex items-start gap-2 rounded border border-warn/40 bg-warn/10 px-3 py-2 text-[13px]">
+					<AlertTriangle className="mt-0.5 size-4 shrink-0 text-warn" />
+					<div className="grid gap-1">
+						<span>
+							Install commands for {missing.map((b) => b.platform).join(', ')} won't work until this server has those agent builds. Put them in{' '}
+							<span className="font-mono text-xs">{downloads.data.dir}</span> or let the server fetch them from the v{downloads.data.server_version} release.
+						</span>
+					</div>
 				</div>
+			)}
+			<div className="rounded border border-line bg-surface">
+				{!tokens.items.length ? (
+					<Empty>{tokens.isLoading ? 'Loading…' : 'No active tokens. Create one to enroll a machine.'}</Empty>
+				) : (
+					<Table>
+						<thead>
+							<tr>
+								<Th>Group</Th>
+								<Th>Used</Th>
+								<Th>Expires</Th>
+								<Th className="w-20" />
+							</tr>
+						</thead>
+						<tbody>
+							{tokens.items.map((t) => (
+								<Tr key={t.id} className={fresh.rowClass(t.id)}>
+									<Td>{t.group ?? <span className="text-muted">No group</span>}</Td>
+									<Td className="font-mono text-xs tabular">
+										{t.uses} / {t.max_uses}
+									</Td>
+									<Td className="text-muted">{until(t.expires)}</Td>
+									<Td>
+										<Button size="sm" variant="danger" onClick={() => revoke.mutate(t.id)}>
+											Revoke
+										</Button>
+									</Td>
+								</Tr>
+							))}
+						</tbody>
+					</Table>
+				)}
 			</div>
+			{downloads.data && (
+				<section className="mt-4 grid gap-2">
+					<h2 className="label-caps">Agent builds on this server</h2>
+					<div className="rounded border border-line bg-surface p-3">
+						<AgentBuilds binaries={downloads.data.binaries} />
+					</div>
+				</section>
+			)}
+			<FormDialog<NewEnrollToken>
+				open={adding}
+				onOpenChange={setAdding}
+				title="New enrollment token"
+				description="Machines that use it join the group you pick."
+				submitLabel="Create token"
+				success="Token created"
+				invalidate={[keys.tokens, keys.agentDownloads]}
+				className="md:max-w-2xl"
+				action={(f) =>
+					api.post<NewEnrollToken>('/enroll-tokens', {
+						group_id: group && group !== 'none' ? Number(group) : null,
+						hours: Number(f.get('hours')),
+						max_uses: Number(f.get('max_uses')),
+					})
+				}
+				onCreated={(t) => fresh.mark(t.id)}
+				successView={(t) => (
+					<>
+						<p className="text-[13px] text-muted">The token is shown once. Run one of these on the machine to install and enroll it.</p>
+						<CopyBlock label="Linux / macOS (as root)" text={t.linux} />
+						<CopyBlock label="Windows (PowerShell as Administrator)" text={t.windows} />
+						<CopyBlock label="Token" text={t.token} />
+						{t.binaries.some((b) => !b.present) && (
+							<div className="rounded border border-warn/40 bg-warn/10 px-3 py-2">
+								<AgentBuilds binaries={t.binaries} />
+							</div>
+						)}
+					</>
+				)}
+			>
+				<Field label="Group">
+					<AsyncCombobox<Group>
+						endpoint="/groups"
+						toOption={groupOption}
+						extra={[NO_GROUP]}
+						value={group ?? 'none'}
+						onChange={setGroup}
+						searchPlaceholder="Search groups…"
+						aria-label="Group"
+					/>
+				</Field>
+				<div className="grid gap-3 sm:grid-cols-2">
+					<Field label="Expires in">
+						<Select name="hours" defaultValue="24">
+							<option value="1">1 hour</option>
+							<option value="24">1 day</option>
+							<option value="168">7 days</option>
+							<option value="720">30 days</option>
+						</Select>
+					</Field>
+					<Field label="Max uses">
+						<Input name="max_uses" type="number" min={1} max={100000} defaultValue={1} required />
+					</Field>
+				</div>
+			</FormDialog>
 		</AdminOnly>
 	);
 }
@@ -275,11 +333,8 @@ export function UsersPage() {
 	const ssoQ = useSsoEnabled();
 	const me = useMe();
 	const [deleting, setDeleting] = React.useState<{ id: number; username: string } | null>(null);
-	const add = useAction(
-		(b: { username: string; email: string; password: string; role: string }) =>
-			api.post('/users', { ...b, email: b.email || null, password: b.password || null }),
-		{ invalidate: [keys.users], success: 'User added' },
-	);
+	const [adding, setAdding] = React.useState(false);
+	const fresh = useNewRow<number>();
 	const role = useAction((v: { id: number; role: Role }) => api.post(`/users/${v.id}/role`, { role: v.role }), {
 		invalidate: [keys.users],
 		success: 'Role changed',
@@ -296,11 +351,17 @@ export function UsersPage() {
 	const sso = ssoQ.data ?? false;
 	return (
 		<AdminOnly>
-			<PageHeader title="Users" sub="Viewers see devices. Operators can also open desktops and shells and run jobs. Admins manage everything." />
-			<div className="grid gap-3 xl:grid-cols-[1fr_320px]">
-				<div>
-				<SearchBox value={text} onChange={setText} placeholder="Search users or email…" />
-				<div className="rounded border border-line bg-surface">
+			<PageHeader
+				title="Users"
+				sub="Viewers see devices. Operators can also open desktops and shells and run jobs. Admins manage everything."
+				primary={
+					<Button variant="primary" onClick={() => setAdding(true)}>
+						<Plus /> Add user
+					</Button>
+				}
+			/>
+			<SearchBox value={text} onChange={setText} placeholder="Search users or email…" />
+			<div className="rounded border border-line bg-surface">
 					<Table>
 						<thead>
 							<tr>
@@ -314,7 +375,7 @@ export function UsersPage() {
 						</thead>
 						<tbody>
 							{users.items.map((u) => (
-								<Tr key={u.id}>
+								<Tr key={u.id} className={fresh.rowClass(u.id)}>
 									<Td className="font-medium">
 										{u.username}
 										{u.id === me.data?.id && <span className="ml-1.5 text-xs text-muted">(you)</span>}
@@ -370,48 +431,41 @@ export function UsersPage() {
 						</tbody>
 					</Table>
 					<LoadMore hasNextPage={!!users.hasNextPage} isFetchingNextPage={users.isFetchingNextPage} fetchNextPage={users.fetchNextPage} />
-				</div>
-				</div>
-				<Panel title="Add a user">
-					<form
-						className="grid gap-3"
-						onSubmit={(e) => {
-							e.preventDefault();
-							const f = e.currentTarget;
-							const d = new FormData(f);
-							add.mutate(
-								{
-									username: String(d.get('username')),
-									email: String(d.get('email')),
-									password: String(d.get('password')),
-									role: String(d.get('role')),
-								},
-								{ onSuccess: () => f.reset() },
-							);
-						}}
-					>
-						<Field label="User name">
-							<Input name="username" required autoComplete="off" />
-						</Field>
-						<Field label="Email" hint="Links their Microsoft, Google or GitHub sign-in on first use.">
-							<Input name="email" type="email" autoComplete="off" />
-						</Field>
-						<Field label={sso ? 'Password (optional with SSO)' : 'Password'}>
-							<Input name="password" type="password" minLength={8} required={!sso} autoComplete="new-password" />
-						</Field>
-						<Field label="Role">
-							<Select name="role" defaultValue="operator">
-								{ROLES.map((r) => (
-									<option key={r}>{r}</option>
-								))}
-							</Select>
-						</Field>
-						<Button type="submit" variant="primary">
-							<Plus /> Add user
-						</Button>
-					</form>
-				</Panel>
 			</div>
+			<FormDialog
+				open={adding}
+				onOpenChange={setAdding}
+				title="Add user"
+				submitLabel="Add user"
+				success="User added"
+				invalidate={[keys.users]}
+				action={(f) =>
+					api.post<{ id: number }>('/users', {
+						username: String(f.get('username') ?? ''),
+						email: String(f.get('email') ?? '') || null,
+						password: String(f.get('password') ?? '') || null,
+						role: String(f.get('role') ?? 'operator'),
+					})
+				}
+				onCreated={(r) => fresh.mark(r.id)}
+			>
+				<Field label="User name">
+					<Input name="username" required autoComplete="off" autoFocus />
+				</Field>
+				<Field label="Email" hint="Links their Microsoft, Google or GitHub sign-in on first use.">
+					<Input name="email" type="email" autoComplete="off" />
+				</Field>
+				<Field label={sso ? 'Password (optional with SSO)' : 'Password'}>
+					<Input name="password" type="password" minLength={8} required={!sso} autoComplete="new-password" />
+				</Field>
+				<Field label="Role">
+					<Select name="role" defaultValue="operator">
+						{ROLES.map((r) => (
+							<option key={r}>{r}</option>
+						))}
+					</Select>
+				</Field>
+			</FormDialog>
 			<Confirm
 				open={!!deleting}
 				onOpenChange={(v) => !v && setDeleting(null)}

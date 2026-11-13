@@ -8,6 +8,9 @@
 //! - `DESKHAND_ADMIN_PASSWORD` (optional): with no users yet, creates `admin` with this
 //!   password; without it the server prints a one-time setup link
 //! - `DESKHAND_TRUST_PROXY=1`: believe X-Forwarded-Proto/-For from a TLS proxy in front
+//! - `DESKHAND_LOGIN_RATE` (default 5): sign-in attempts allowed per IP per minute
+//! - `DESKHAND_AGENT_DIR` (default `agents/` beside the database): agent builds served
+//!   at `/dl/...` for the install scripts (`/install.sh`, `/install.ps1`)
 //! - `DESKHAND_PUBLIC_URL`, `DESKHAND_ENTRA_*`, `DESKHAND_GOOGLE_*`, `DESKHAND_GITHUB_*`,
 //!   `DESKHAND_SSO_AUTO_PROVISION`, `DESKHAND_PASSWORD_LOGIN`: single sign-on (docs/sso.md)
 
@@ -15,6 +18,7 @@ mod api;
 mod auth;
 mod db;
 mod db_pages;
+mod downloads;
 mod inventory;
 mod jobs;
 mod jobs_ui;
@@ -57,6 +61,12 @@ pub struct App {
     /// Set while there are no users: the token the first admin signs up with.
     pub setup_token: Mutex<Option<String>>,
     pub login_limit: auth::RateLimit,
+    /// Agent binary downloads per IP (`/dl`).
+    pub download_limit: auth::RateLimit,
+    /// DESKHAND_PUBLIC_URL: the address agents and install scripts use.
+    pub public_url: Option<String>,
+    /// Agent builds for `/dl`: the agents directory, filled from the matching release.
+    pub builds: downloads::Agents,
     pub sso: sso::Sso,
     /// DESKHAND_PASSWORD_LOGIN, which only takes effect with an SSO provider set up
     /// (see [`auth::password_login`]).
@@ -146,7 +156,12 @@ async fn main() {
         db,
         trust_proxy: std::env::var("DESKHAND_TRUST_PROXY").is_ok_and(|v| v == "1"),
         setup_token: Mutex::new(setup_token),
-        login_limit: Default::default(),
+        login_limit: auth::RateLimit::with_max(
+            std::env::var("DESKHAND_LOGIN_RATE").ok().and_then(|v| v.parse().ok()).filter(|n| *n > 0).unwrap_or(5),
+        ),
+        download_limit: auth::RateLimit::with_max(downloads::DOWNLOADS_PER_MINUTE),
+        public_url: std::env::var("DESKHAND_PUBLIC_URL").ok().filter(|v| !v.is_empty()),
+        builds: downloads::Agents::from_env(&db_path),
         sso: sso::Sso::from_env(),
         password_login: std::env::var("DESKHAND_PASSWORD_LOGIN").map_or(true, |v| v != "0"),
         agents: Mutex::default(),
@@ -194,6 +209,9 @@ async fn main() {
         .route("/auth/{provider}/start", get(auth::sso_start))
         .route("/auth/{provider}/callback", get(auth::sso_callback))
         .route("/api/enroll", post(enroll))
+        .route("/dl/{name}", get(downloads::download))
+        .route("/install.sh", get(downloads::install_sh))
+        .route("/install.ps1", get(downloads::install_ps1))
         .route("/agent/connect", get(agent_connect))
         .route("/agent/stream/{sid}", get(agent_stream))
         .route("/d/{id}", get(|Path(id): Path<String>| async move { Redirect::to(&format!("/d/{id}/")) }))
@@ -204,9 +222,23 @@ async fn main() {
         // Everything else is the web app: its files, else its index.html for its routes.
         .fallback(get(web::spa))
         .layer(axum::middleware::from_fn(auth::check_origin))
-        .with_state(app);
+        .with_state(app.clone());
     let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind");
     log::info!("deskhand server on http://{addr}");
+    {
+        let app = app.clone();
+        tokio::spawn(async move {
+            app.builds.prefetch().await;
+            let missing: Vec<&str> = app.builds.binaries().iter().filter(|b| !b.present).map(|b| b.file).collect();
+            if !missing.is_empty() {
+                log::warn!(
+                    "agent builds not available in {}: {} (scripts/package-agents.sh)",
+                    app.builds.dir.display(),
+                    missing.join(", ")
+                );
+            }
+        });
+    }
     axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .expect("serve");
@@ -268,14 +300,15 @@ async fn control(app: Shared, id: String, ip: String, ws: WebSocket) {
     let Ok(Some(Ok(Message::Text(t)))) = hello else {
         return;
     };
-    let Ok(AgentMsg::Hello { hostname, os, voxl_token, .. }) = serde_json::from_str(&t) else {
+    let Ok(AgentMsg::Hello { hostname, os, voxl_token, version, .. }) = serde_json::from_str(&t) else {
         log::warn!("agent {id} sent a bad hello");
         return;
     };
     let conn = app.next_conn.fetch_add(1, Ordering::Relaxed);
     let (tx, mut rx) = mpsc::unbounded_channel();
-    log::info!("agent {id} ({hostname}, {os}) connected");
+    log::info!("agent {id} ({hostname}, {os}, v{version}) connected");
     let _ = app.db.device_seen(&id, Some(&hostname), Some(&os), now());
+    let _ = app.db.set_agent_version(&id, &version);
     app.agents
         .lock()
         .unwrap()

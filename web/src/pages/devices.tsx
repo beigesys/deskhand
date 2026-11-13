@@ -6,7 +6,7 @@ import { keys, useAction, useCan, useDevices } from '@/api/hooks';
 import type { Device, Group } from '@/api/types';
 import { AsyncCombobox, groupOption, NO_GROUP } from '@/components/ui/async-combobox';
 import { LoadMore } from '@/components/ui/load-more';
-import { AttentionFlag, barColor } from '@/components/devices';
+import { AgentOutdated, AttentionFlag, barColor } from '@/components/devices';
 import { RunDialog } from '@/components/jobs';
 import { Button } from '@/components/ui/button';
 import { Chip, Empty, PageHeader } from '@/components/ui/display';
@@ -126,6 +126,7 @@ function DeviceCard({
 			<div className="flex flex-wrap gap-1.5">
 				<Chip>{d.os}</Chip>
 				{d.ip && <Chip>{d.ip}</Chip>}
+				<AgentOutdated d={d} />
 				{d.group && <span className="text-xs text-muted">{d.group}</span>}
 			</div>
 			{d.attention.length > 0 && <AttentionFlag d={d} />}
@@ -403,7 +404,10 @@ export function DevicesPage() {
 										<Td className="hidden lg:table-cell">{d.ip ? <Chip>{d.ip}</Chip> : <span className="text-muted">—</span>}</Td>
 										<Td className="hidden lg:table-cell">{d.group ?? <span className="text-muted">—</span>}</Td>
 										<Td>
-											<AttentionFlag d={d} />
+											<span className="flex items-center gap-2">
+												<AttentionFlag d={d} />
+												<AgentOutdated d={d} />
+											</span>
 										</Td>
 										<Td className="hidden font-mono text-xs tabular text-muted xl:table-cell" title={d.last_boot ? ago(d.last_boot) : undefined}>
 											{d.last_boot ? span(now() - d.last_boot) : '—'}

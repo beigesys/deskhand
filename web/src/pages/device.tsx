@@ -20,7 +20,7 @@ import { api } from '@/api/client';
 import { keys, useAction, useCan, useDevice } from '@/api/hooks';
 import type { Device, DeviceDetail, Group, Inventory, JobKind } from '@/api/types';
 import { AsyncCombobox, groupOption, NO_GROUP } from '@/components/ui/async-combobox';
-import { AttentionBadges, barColor } from '@/components/devices';
+import { AgentOutdated, AttentionBadges, barColor } from '@/components/devices';
 import { confirmText, RunDialog } from '@/components/jobs';
 import { Button } from '@/components/ui/button';
 import { Confirm } from '@/components/ui/confirm';
@@ -58,6 +58,7 @@ function Overview({ d, inv, at }: { d: Device; inv: Inventory | null; at: number
 						['Status', d.online ? <span className="text-ok">Online since {datetime(d.online_since)}</span> : <span className="text-off">Last seen {ago(d.last_seen)}</span>],
 						['Group', d.group ?? '—'],
 						['Device ID', <Chip key="i">{d.id}</Chip>],
+						['Agent', d.agent_version ? <span key="v" className="flex items-center gap-2"><Chip>v{d.agent_version}</Chip><AgentOutdated d={d} /></span> : '—'],
 						['Signed in', d.logged_in_users.join(', ') || '—'],
 						['Inventory', at ? `collected ${ago(at)}` : 'not yet'],
 					]}
@@ -342,6 +343,7 @@ export function DevicePage() {
 							{d.ip && <Chip>{d.ip}</Chip>}
 							{d.serial && <Chip title="Serial">{d.serial}</Chip>}
 							<AttentionBadges d={d} max={5} />
+							<AgentOutdated d={d} />
 						</div>
 					</div>
 					<div className="flex flex-wrap gap-2">

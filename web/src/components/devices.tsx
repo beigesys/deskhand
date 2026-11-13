@@ -44,3 +44,13 @@ export function AttentionFlag({ d }: { d: Pick<Device, 'attention'> }) {
 		</span>
 	);
 }
+
+/** "outdated" next to a device whose agent version isn't the server's. */
+export function AgentOutdated({ d }: { d: Pick<Device, 'agent_outdated' | 'agent_version'> }) {
+	if (!d.agent_outdated) return null;
+	return (
+		<span title={`Agent ${d.agent_version ?? 'unknown'} differs from this server's version`}>
+			<Badge tone="warn">outdated agent</Badge>
+		</span>
+	);
+}

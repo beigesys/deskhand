@@ -301,6 +301,19 @@ pub async fn delete_group(State(app): State<Shared>, headers: HeaderMap, Path(id
 
 // --- enrollment ---
 
+/// A warning naming the agent builds this server doesn't have yet.
+fn missing_note(app: &crate::App) -> String {
+    let missing: Vec<&str> = app.builds.binaries().iter().filter(|b| !b.present).map(|b| b.platform).collect();
+    if missing.is_empty() {
+        return String::new();
+    }
+    format!(
+        r#"<p class="muted">Not on this server yet: {}. Put the builds in {} (scripts/package-agents.sh).</p>"#,
+        esc(&missing.join(", ")),
+        esc(&app.builds.dir.display().to_string())
+    )
+}
+
 fn enroll_page(app: &crate::App, headers: &HeaderMap, user: &User, new_token: Option<&str>) -> Response {
     let (tokens, groups) = match (app.db.enroll_tokens(now()), app.db.groups()) {
         (Ok(t), Ok(g)) => (t, g),
@@ -310,12 +323,14 @@ fn enroll_page(app: &crate::App, headers: &HeaderMap, user: &User, new_token: Op
     if let Some(token) = new_token {
         let base = base_url(app, headers);
         let t = esc(token);
-        let base = esc(&base);
         let _ = write!(
             b,
             r#"<section class="card new"><h2>New token</h2><p class="muted">Shown once. Copy it now.</p><pre>{t}</pre>
-<h3>Linux (as root)</h3><pre>curl -fsSL https://deskhand.sh/dl/deskhand-agent-linux -o /usr/local/bin/deskhand-agent &amp;&amp; chmod +x /usr/local/bin/deskhand-agent &amp;&amp; deskhand-agent enroll --server {base} --token {t} &amp;&amp; deskhand-agent</pre>
-<h3>Windows (PowerShell as Administrator)</h3><pre>New-Item -ItemType Directory -Force "$env:ProgramFiles\Deskhand" | Out-Null; iwr https://deskhand.sh/dl/deskhand-agent-windows.exe -OutFile "$env:ProgramFiles\Deskhand\deskhand-agent.exe"; &amp; "$env:ProgramFiles\Deskhand\deskhand-agent.exe" enroll --server {base} --token {t}; &amp; "$env:ProgramFiles\Deskhand\deskhand-agent.exe"</pre></section>"#
+<h3>Linux (as root)</h3><pre>{linux}</pre>
+<h3>Windows (PowerShell as Administrator)</h3><pre>{windows}</pre>{missing}</section>"#,
+            linux = esc(&crate::downloads::linux_command(&base, token)),
+            windows = esc(&crate::downloads::windows_command(&base, token)),
+            missing = missing_note(app),
         );
     }
     let _ = write!(

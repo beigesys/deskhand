@@ -77,8 +77,12 @@ pub fn is_https(app: &App, headers: &HeaderMap) -> bool {
             .is_some_and(|v| v.eq_ignore_ascii_case("https"))
 }
 
-/// The base URL the browser used, for links agents will follow.
+/// The base URL agents should use: DESKHAND_PUBLIC_URL when set, else the one the
+/// browser used.
 pub fn base_url(app: &App, headers: &HeaderMap) -> String {
+    if let Some(u) = &app.public_url {
+        return u.trim_end_matches('/').to_owned();
+    }
     let host = headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
@@ -106,20 +110,32 @@ fn session_cookie(app: &App, headers: &HeaderMap, token: &str) -> String {
     format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_SECS}{secure}")
 }
 
-/// Five sign-in attempts per IP per minute.
-#[derive(Default)]
-pub struct RateLimit(Mutex<HashMap<IpAddr, Vec<Instant>>>);
+/// At most `max` requests per IP per minute (five sign-in attempts by default).
+pub struct RateLimit {
+    hits: Mutex<HashMap<IpAddr, Vec<Instant>>>,
+    max: usize,
+}
+
+impl Default for RateLimit {
+    fn default() -> Self {
+        RateLimit::with_max(5)
+    }
+}
 
 impl RateLimit {
+    pub fn with_max(max: usize) -> Self {
+        RateLimit { hits: Mutex::default(), max }
+    }
+
     pub(crate) fn allow(&self, ip: IpAddr) -> bool {
-        let mut m = self.0.lock().unwrap();
+        let mut m = self.hits.lock().unwrap();
         let now = Instant::now();
         m.retain(|_, v| {
             v.retain(|t| now.duration_since(*t) < Duration::from_secs(60));
             !v.is_empty()
         });
         let v = m.entry(ip).or_default();
-        if v.len() >= 5 {
+        if v.len() >= self.max {
             return false;
         }
         v.push(now);

@@ -276,6 +276,7 @@ async fn control(cfg: &std::sync::Arc<Config>, runner: &jobs::Runner, outbox: &m
         hostname: hostname(),
         os: std::env::consts::OS.into(),
         voxl_token: cfg.voxl_token.clone(),
+        version: env!("CARGO_PKG_VERSION").into(),
     };
     tx.send(Message::Text(serde_json::to_string(&hello).unwrap().into()))
         .await

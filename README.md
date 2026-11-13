@@ -69,10 +69,42 @@ On the first start, with no users yet, it prints a one-time link,
 Browsers only allow WebCodecs on HTTPS or localhost, so for real use put the server
 behind a TLS proxy (Caddy, nginx), set `DESKHAND_TRUST_PROXY=1`, and use `https://` URLs.
 
-### 3. Enroll a machine
+### 3. Agent downloads
 
-1. In the dashboard, open **Enroll**, pick a group, and create a token.
-2. Run the install command it shows on the machine. By hand, that's:
+The server hands out the agent itself: install commands download from
+`https://SERVER/dl/...`, never from anywhere else. It serves the builds in its agents
+directory (`DESKHAND_AGENT_DIR`, default `agents/` next to the database), named
+`deskhand-agent-linux-x86_64`, `deskhand-agent-linux-aarch64`,
+`deskhand-agent-windows-x86_64.exe` and `deskhand-agent-macos-aarch64`.
+
+Fill it either way:
+
+- **Build them:** `scripts/package-agents.sh /path/to/agents` builds every platform this
+  machine can (static Linux via zigbuild, Windows via `scripts/build-windows.sh`) and
+  copies them in under those names.
+- **Let the server fetch them:** a build missing from the directory is downloaded from
+  the GitHub Release matching the server's own version (`v{version}` of
+  `DESKHAND_AGENT_REPO`, default `beigesys/deskhand`), checked against that release's
+  `SHA256SUMS`, and cached there; the server tries all platforms at startup. Agents
+  therefore always match the server's version. `DESKHAND_AGENT_SOURCE=local` turns
+  fetching off.
+
+The Enrollment page lists which builds are ready and warns about missing ones.
+
+### 4. Enroll a machine
+
+1. In the dashboard, open **Enrollment** and click **New token**; pick a group.
+2. Run the command it shows on the machine. They come from this server:
+
+```sh
+curl -fsSL https://SERVER/install.sh | sudo sh -s -- TOKEN        # Linux / macOS
+irm https://SERVER/install.ps1 | iex; Install-Deskhand -Token TOKEN  # Windows, admin PowerShell
+```
+
+On Linux, `install.sh` puts the agent in `/usr/local/bin`, enrolls it with
+`/etc/deskhand/agent.json`, and installs a `deskhand-agent` systemd unit. On Windows,
+`install.ps1` installs to `C:\Program Files\Deskhand` and starts the agent in your
+session (a Windows service comes with service mode; see `docs/windows.md`). By hand:
 
 ```sh
 deskhand-agent enroll --server https://SERVER --token TOKEN   # saves agent.json in the config dir
@@ -81,9 +113,9 @@ DISPLAY=:0 deskhand-agent                                     # connects; voxl f
 
 Linux needs an X11 display; Wayland isn't supported yet. `--config FILE` (or
 `DESKHAND_CONFIG`) picks another identity file, so several agents can run on one machine
-while developing.
+while developing. The device list flags agents whose version differs from the server's.
 
-### 4. Open a desktop or shell
+### 5. Open a desktop or shell
 
 The device list shows each machine online or offline. **Desktop** opens its screen
 (`/d/{id}/`); **Shell** opens a terminal on it (`/d/{id}/shell`: PowerShell on Windows,
@@ -163,7 +195,12 @@ chromium`, or `PW_CHROMIUM=/path/to/chrome`); `DESKHAND_SHOTS=DIR` saves screens
 | `DESKHAND_DB` | `./deskhand.db` | SQLite database file |
 | `DESKHAND_ADMIN_PASSWORD` | unset | With no users yet, creates `admin` with this password |
 | `DESKHAND_TRUST_PROXY` | unset | `1` to trust `X-Forwarded-Proto`/`-For` from your TLS proxy (sets `Secure` cookies) |
-| `DESKHAND_PUBLIC_URL`, `DESKHAND_ENTRA_*`, `DESKHAND_GOOGLE_*`, `DESKHAND_GITHUB_*` | unset | Single sign-on with Microsoft Entra ID, Google, GitHub: see [docs/sso.md](docs/sso.md) |
+| `DESKHAND_PUBLIC_URL` | unset | The `https://` address users and agents use; install commands and SSO redirects are built from it (else from the request's host) |
+| `DESKHAND_AGENT_DIR` | `agents/` beside the DB | Agent builds served at `/dl/...` |
+| `DESKHAND_AGENT_SOURCE` | `github` | `local` never fetches missing agent builds |
+| `DESKHAND_AGENT_REPO` | `beigesys/deskhand` | GitHub repo whose `v{server version}` release supplies missing agent builds |
+| `DESKHAND_LOGIN_RATE` | `5` | Sign-in attempts allowed per IP per minute |
+| `DESKHAND_ENTRA_*`, `DESKHAND_GOOGLE_*`, `DESKHAND_GITHUB_*` | unset | Single sign-on with Microsoft Entra ID, Google, GitHub: see [docs/sso.md](docs/sso.md) |
 | `DESKHAND_SSO_AUTO_PROVISION` | off | `viewer` or `operator`: create users on first SSO sign-in (restricted providers only) |
 | `DESKHAND_PASSWORD_LOGIN` | `1` | `0` hides password sign-in once an SSO provider is set up |
 

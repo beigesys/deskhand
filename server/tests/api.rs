@@ -38,6 +38,7 @@ fn start() -> Server {
         .env("DESKHAND_ADDR", format!("127.0.0.1:{port}"))
         .env("DESKHAND_DB", dir.join("t.db"))
         .env("DESKHAND_ADMIN_PASSWORD", "admin-password")
+        .env("DESKHAND_AGENT_SOURCE", "local")
         .env("RUST_LOG", "warn")
         .spawn()
         .unwrap();
@@ -152,7 +153,12 @@ fn api_v1() {
     let (st, tok) = admin.post("/api/v1/enroll-tokens", json!({ "group_id": gid, "hours": 24, "max_uses": 3 }));
     assert_eq!(st, 200);
     assert_eq!(tok["token"].as_str().unwrap().len(), 40);
-    assert!(tok["linux"].as_str().unwrap().contains("--token"));
+    let token = tok["token"].as_str().unwrap();
+    let base = admin.base.clone();
+    assert_eq!(tok["linux"].as_str().unwrap(), format!("curl -fsSL {base}/install.sh | sudo sh -s -- {token}"));
+    assert_eq!(tok["windows"].as_str().unwrap(), format!("irm {base}/install.ps1 | iex; Install-Deskhand -Token {token}"));
+    assert!(!tok.to_string().contains("deskhand.sh"));
+    assert_eq!(tok["binaries"].as_array().unwrap().len(), 4);
     let (_, tokens) = admin.get("/api/v1/enroll-tokens");
     assert_eq!(tokens["items"].as_array().unwrap().len(), 1);
 
