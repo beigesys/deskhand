@@ -201,7 +201,7 @@ mod vp9 {
                     ),
                     "vpx init",
                 )?;
-                let ctl = |e: &mut Vp9, id: u32, v: c_int| {
+                let ctl = |e: &mut Vp9, id: ffi::vp8e_enc_control_id, v: c_int| {
                     ffi::vpx_codec_control_(&mut e.ctx, id as c_int, v);
                 };
                 ctl(&mut e, ffi::vp8e_enc_control_id_VP8E_SET_CPUUSED, 8);

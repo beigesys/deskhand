@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_TOOLCHAIN: "1.98.1"
+  BUN_VERSION: "1.4.2"
+  ESBUILD_VERSION: "0.27.2"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Tests, typecheck, clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          submodules: recursive
+      - name: Rust ${{ env.RUST_TOOLCHAIN }}
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy
+          rustup default "$RUST_TOOLCHAIN"
+      - name: Build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nasm libclang-dev
+          npm install -g "esbuild@$ESBUILD_VERSION"
+      - uses: oven-sh/setup-bun@v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/cache@v4.2.3
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('web/bun.lock') }}
+      - name: Web app
+        working-directory: web
+        run: |
+          bun install --frozen-lockfile
+          bun run typecheck
+          bun run build
+      - uses: actions/cache@v4.2.3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-test-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-test-
+      - name: Tests
+        run: cargo test --locked --workspace
+      - name: Clippy (warnings only)
+        continue-on-error: true
+        run: cargo clippy --locked --workspace --all-targets
+
+  build:
+    name: Static binaries
+    uses: ./.github/workflows/build.yml

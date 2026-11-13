@@ -1,0 +1,55 @@
+# Tag vX.Y.Z (scripts/release.sh) and push the tag: this builds every static binary,
+# then publishes them with SHA256SUMS as the GitHub Release for that tag.
+# Run it by hand (workflow_dispatch) for a dry run: it builds and checks, publishes nothing.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Static binaries
+    uses: ./.github/workflows/build.yml
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          pattern: deskhand-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          chmod +x deskhand-*-linux-*
+          sha256sum deskhand-* > SHA256SUMS
+          cat SHA256SUMS
+      - name: Version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          have=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          [ "$want" = "$have" ] || { echo "tag $GITHUB_REF_NAME but Cargo.toml says $have"; exit 1; }
+      - name: Create the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+      - name: Dry run summary
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          echo "Dry run: built and checked these, published nothing." >> "$GITHUB_STEP_SUMMARY"
+          { echo '```'; ls -l dist; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

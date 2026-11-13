@@ -1,0 +1,170 @@
+# Builds every shipped binary as a single static file and fails if any of them links
+# something the OS doesn't provide (rule #1). Called by ci.yml and release.yml; the
+# binaries come out as one artifact per target, named as the release assets are.
+name: Build
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  RUST_TOOLCHAIN: "1.98.1"
+  BUN_VERSION: "1.4.2"
+  ESBUILD_VERSION: "0.27.2"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.arch }} (musl, static)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+    env:
+      TARGET: ${{ matrix.arch }}-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          submodules: recursive
+      - name: Rust ${{ env.RUST_TOOLCHAIN }}
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target "$TARGET"
+          rustup default "$RUST_TOOLCHAIN"
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild@0.24.1
+      # nasm for libvpx's x86 assembly; esbuild bundles voxl's viewer; libclang for bindgen.
+      - name: Build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nasm libclang-dev
+          npm install -g "esbuild@$ESBUILD_VERSION"
+      - uses: oven-sh/setup-bun@v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/cache@v4.2.3
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('web/bun.lock') }}
+      # The web app is embedded in deskhand-server, so it's built first.
+      - name: Web app
+        working-directory: web
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+      - uses: actions/cache@v4.2.3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ env.TARGET }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ env.TARGET }}-
+      - name: Build
+        run: cargo zigbuild --release --locked --target "$TARGET" -p deskhand-agent -p deskhand-server
+      - name: Check binaries are static
+        run: |
+          mkdir dist
+          for bin in deskhand-agent deskhand-server; do
+            f="target/$TARGET/release/$bin"
+            file "$f"
+            file "$f" | grep -Eq 'statically linked|static-pie linked' || { echo "FAIL $bin: not static"; exit 1; }
+            if readelf -d "$f" 2>/dev/null | grep -q NEEDED; then
+              echo "FAIL $bin: needs shared libraries:"; readelf -d "$f" | grep NEEDED; exit 1
+            fi
+            cp "$f" "dist/$bin-linux-${{ matrix.arch }}"
+          done
+      - uses: actions/upload-artifact@v4.6.2
+        with:
+          name: deskhand-linux-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows x86_64 (static .exe)
+    runs-on: windows-latest
+    env:
+      # Static libvpx and Opus (vcpkg) and OpenH264 (built by its crate) with the static
+      # C runtime (+crt-static in .cargo/config.toml): the .exe files need no
+      # vcruntime140.dll or anything else that doesn't come with Windows.
+      VCPKGRS_TRIPLET: x64-windows-static
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\vcpkg-cache,readwrite
+      # bindgen (vpx headers) needs libclang; the runner image has LLVM here.
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+      TARGET: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - name: Rust ${{ env.RUST_TOOLCHAIN }}
+        shell: pwsh
+        run: |
+          rustup toolchain install $env:RUST_TOOLCHAIN --profile minimal --target $env:TARGET
+          rustup default $env:RUST_TOOLCHAIN
+      - uses: oven-sh/setup-bun@v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Web app
+        working-directory: web
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+      - uses: actions/cache@v4.2.3
+        with:
+          path: vcpkg-cache
+          key: vcpkg-${{ runner.os }}-x64-windows-static-libvpx-opus-v1
+      - name: Native libraries (vcpkg) and esbuild
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force vcpkg-cache | Out-Null
+          vcpkg install libvpx opus --triplet $env:VCPKGRS_TRIPLET
+          "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+          npm install -g "esbuild@$env:ESBUILD_VERSION"
+      - uses: actions/cache@v4.2.3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ env.TARGET }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ env.TARGET }}-
+      - name: Build
+        run: cargo build --release --locked --target ${{ env.TARGET }} -p deskhand-agent -p deskhand-server
+      # Fails if either .exe imports a DLL that doesn't come with Windows: the C/C++
+      # runtimes (vcruntime, msvcp, ucrtbase, api-ms-win-crt-*) or any codec library.
+      - name: Check imports are Windows-only
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe |
+            Where-Object FullName -like '*Hostx64\x64*' | Select-Object -First 1
+          $deny = '^(vcruntime|msvcp|ucrtbase|concrt|vccorlib|api-ms-win-crt-|vpx|libvpx|opus|libopus|openh264|libgcc|libstdc|libwinpthread)'
+          $bad = $false
+          New-Item -ItemType Directory -Force dist | Out-Null
+          foreach ($bin in 'deskhand-agent', 'deskhand-server') {
+            $path = "target\$env:TARGET\release\$bin.exe"
+            $dlls = & $dumpbin.FullName /nologo /dependents $path |
+              ForEach-Object { $_.Trim() } | Where-Object { $_ -match '\.dll$' }
+            Write-Output "$bin.exe imports: $($dlls -join ', ')"
+            foreach ($d in $dlls) {
+              $l = $d.ToLower()
+              # API sets (api-ms-win-core-*) resolve inside Windows and have no file.
+              $system = $l.StartsWith('api-ms-win-') -or $l.StartsWith('ext-ms-win-') -or
+                (Test-Path "$env:SystemRoot\System32\$d")
+              if ($l -match $deny -or -not $system) {
+                Write-Output "FAIL ${bin}.exe: $d is not part of Windows"
+                $bad = $true
+              }
+            }
+            Copy-Item $path "dist\$bin-windows-x86_64.exe"
+          }
+          if ($bad) { exit 1 }
+      - uses: actions/upload-artifact@v4.6.2
+        with:
+          name: deskhand-windows-x86_64
+          path: dist/*
+          if-no-files-found: error
