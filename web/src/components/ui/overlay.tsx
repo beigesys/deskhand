@@ -25,11 +25,15 @@ export function DialogContent({
 			<D.Overlay className="fixed inset-0 z-40 bg-scrim" />
 			<D.Content
 				className={cn(
-					'fixed left-1/2 top-[10vh] z-50 grid max-h-[80vh] w-[calc(100vw-32px)] max-w-lg -translate-x-1/2 gap-0 overflow-hidden rounded border border-line-strong bg-surface',
+					// Desktop: a centered dialog. Phones: a full-height sheet that rises from the bottom.
+					'fixed z-50 flex flex-col overflow-hidden border border-line-strong bg-surface outline-none',
+					'md:left-1/2 md:top-[10vh] md:max-h-[80vh] md:w-[calc(100vw-32px)] md:max-w-lg md:-translate-x-1/2 md:rounded',
+					'max-md:inset-x-0 max-md:bottom-0 max-md:top-[env(safe-area-inset-top,0px)] max-md:rounded-t-lg max-md:border-x-0 max-md:border-b-0',
+					'max-md:data-[state=open]:animate-[dh-rise_.2s_ease-out] motion-reduce:animate-none',
 					className,
 				)}
 			>
-				<div className="flex items-start justify-between gap-4 border-b border-line bg-surface-2 px-4 py-2.5">
+				<div className="flex shrink-0 items-start justify-between gap-4 border-b border-line bg-surface-2 px-4 py-2.5 max-md:py-3">
 					<div>
 						<D.Title className="text-[15px] font-semibold">{title}</D.Title>
 						{description ? (
@@ -38,11 +42,11 @@ export function DialogContent({
 							<D.Description className="sr-only">{title}</D.Description>
 						)}
 					</div>
-					<D.Close className="text-muted hover:text-fg" aria-label="Close">
-						<X className="size-4" />
+					<D.Close className="grid place-items-center text-muted hover:text-fg max-md:size-10 max-md:-m-2" aria-label="Close">
+						<X className="size-4 max-md:size-5" />
 					</D.Close>
 				</div>
-				<div className="overflow-y-auto p-4">{children}</div>
+				<div className="min-h-0 flex-1 overflow-y-auto p-4">{children}</div>
 			</D.Content>
 		</D.Portal>
 	);

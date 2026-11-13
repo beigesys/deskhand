@@ -1,7 +1,12 @@
 import * as React from 'react';
-import { Link } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { Plus } from 'lucide-react';
-import { useCan, useScripts } from '@/api/hooks';
+import { api } from '@/api/client';
+import { keys, useCan, useScripts } from '@/api/hooks';
+import type { Shell } from '@/api/types';
+import { Field, Input, Select } from '@/components/ui/form';
+import { FormDialog } from '@/components/ui/form-dialog';
+import { scriptTemplate } from '@/lib/script-templates';
 import { Button } from '@/components/ui/button';
 import { Chip, Empty, PageHeader } from '@/components/ui/display';
 import { Table, Td, Th, Tr } from '@/components/ui/table';
@@ -15,6 +20,8 @@ export function ScriptsPage() {
 	const scripts = useScripts(q);
 	const canEdit = useCan('operator');
 	const list = scripts.items;
+	const [adding, setAdding] = React.useState(false);
+	const navigate = useNavigate();
 	return (
 		<>
 			<PageHeader
@@ -22,10 +29,8 @@ export function ScriptsPage() {
 				sub="Reusable scripts to run on devices."
 				primary={
 					canEdit && (
-						<Button variant="primary" asChild>
-							<Link to="/scripts/$id" params={{ id: 'new' }}>
-								<Plus /> New script
-							</Link>
+						<Button variant="primary" onClick={() => setAdding(true)}>
+							<Plus /> New script
 						</Button>
 					)
 				}
@@ -66,6 +71,42 @@ export function ScriptsPage() {
 				)}
 				<LoadMore hasNextPage={!!scripts.hasNextPage} isFetchingNextPage={scripts.isFetchingNextPage} fetchNextPage={scripts.fetchNextPage} />
 			</div>
+			<FormDialog<{ id: number }>
+				open={adding}
+				onOpenChange={setAdding}
+				title="New script"
+				description="Name it and pick a shell; the editor opens next."
+				submitLabel="Create and edit"
+				success="Script created"
+				invalidate={[keys.scripts]}
+				action={(f) => {
+					const shell = String(f.get('shell') ?? 'powershell') as Shell;
+					return api.post<{ id: number }>('/scripts', {
+						name: String(f.get('name') ?? ''),
+						shell,
+						timeout_s: Number(f.get('timeout_s') ?? 300),
+						body: scriptTemplate[shell],
+					});
+				}}
+				onCreated={(r) => navigate({ to: '/scripts/$id', params: { id: String(r.id) } })}
+			>
+				<Field label="Name">
+					<Input name="name" required maxLength={200} autoFocus placeholder="e.g. Clear print queue" />
+				</Field>
+				<div className="grid gap-3 sm:grid-cols-2">
+					<Field label="Shell">
+						<Select name="shell" defaultValue="powershell">
+							<option value="powershell">PowerShell</option>
+							<option value="cmd">cmd</option>
+							<option value="bash">bash</option>
+							<option value="sh">sh</option>
+						</Select>
+					</Field>
+					<Field label="Timeout (s)">
+						<Input name="timeout_s" type="number" min={1} max={86400} defaultValue={300} required />
+					</Field>
+				</div>
+			</FormDialog>
 		</>
 	);
 }

@@ -47,15 +47,20 @@ test('sign in, see the live device, run a script and read its output', async ({ 
 
 	// A script, then run it on this device and watch the output come back.
 	await page.getByRole('link', { name: 'Scripts', exact: true }).click();
-	await page.getByRole('link', { name: 'New script' }).click();
-	await page.getByLabel('Name').fill('Who am I');
-	await page.getByLabel('Shell').selectOption('bash');
+	await page.getByRole('button', { name: 'New script' }).click();
+	const newScript = page.getByRole('dialog', { name: 'New script' });
+	await newScript.getByLabel('Name').fill('Who am I');
+	await newScript.getByLabel('Shell').selectOption('bash');
+	await newScript.getByRole('button', { name: 'Create and edit' }).click();
+	await expect(newScript).toBeHidden();
+	await expect(page.getByLabel('Name')).toHaveValue('Who am I');
 	const editor = page.locator('.cm-content');
 	await editor.click();
 	await page.keyboard.press('Control+A');
 	await page.keyboard.type('echo "hello-from-$(hostname)"; id -un');
 	await shot(page, '05-script');
 	await page.getByRole('button', { name: 'Save' }).click();
+	await expect(page.getByRole('button', { name: 'Save' })).toBeDisabled();
 	await expect(page.getByRole('button', { name: 'Run…' })).toBeEnabled();
 
 	await page.getByRole('button', { name: 'Run…' }).click();
@@ -132,4 +137,70 @@ test('phone: drawer navigation and device cards', async ({ page }) => {
 	expect(Math.round(a!.y)).toBe(Math.round(b!.y));
 	expect(c!.y).toBeGreaterThan(a!.y);
 	await shot(page, '14-phone-overview');
+});
+
+test('add forms open from the header as dialogs', async ({ page }) => {
+	await signIn(page);
+	const nav = page.getByRole('navigation', { name: 'Main' });
+
+	// Groups: header button, dialog, inline error, then success highlights the new row.
+	await nav.getByRole('link', { name: 'Groups' }).click();
+	await expect(page.getByText('Add a group')).toHaveCount(0);
+	const name = `Site ${Date.now() % 100000}`;
+	await page.getByRole('button', { name: 'Add group' }).click();
+	let dialog = page.getByRole('dialog', { name: 'Add group' });
+	await dialog.getByLabel('Name').fill(name);
+	await shot(page, '17-add-group');
+	await dialog.getByRole('button', { name: 'Add group' }).click();
+	await expect(dialog).toBeHidden();
+	await expect(page.getByRole('row').filter({ hasText: name })).toHaveClass(/dh-new/);
+	// The same name again: the error shows in the dialog, which stays open.
+	await page.getByRole('button', { name: 'Add group' }).click();
+	dialog = page.getByRole('dialog', { name: 'Add group' });
+	await dialog.getByLabel('Name').fill(name);
+	await dialog.getByRole('button', { name: 'Add group' }).click();
+	await expect(dialog.getByRole('alert')).toContainText('already');
+	await dialog.getByRole('button', { name: 'Cancel' }).click();
+
+	// Enrollment: the dialog's success state shows install commands from this server.
+	await nav.getByRole('link', { name: 'Enrollment' }).click();
+	await page.getByRole('button', { name: 'New token' }).click();
+	dialog = page.getByRole('dialog', { name: 'New enrollment token' });
+	await dialog.getByRole('button', { name: 'Create token' }).click();
+	const origin = new URL(page.url()).origin;
+	await expect(dialog.getByText(`curl -fsSL ${origin}/install.sh | sudo sh -s -- `)).toBeVisible();
+	await expect(dialog.getByText(`irm ${origin}/install.ps1 | iex; Install-Deskhand -Token `)).toBeVisible();
+	await expect(dialog.getByText('deskhand.sh')).toHaveCount(0);
+	await shot(page, '18-new-token');
+	await dialog.getByRole('button', { name: 'Done' }).click();
+	await expect(dialog).toBeHidden();
+
+	// Users.
+	await nav.getByRole('link', { name: 'Users' }).click();
+	await page.getByRole('button', { name: 'Add user' }).click();
+	dialog = page.getByRole('dialog', { name: 'Add user' });
+	const username = `tech${Date.now() % 100000}`;
+	await dialog.getByLabel('User name').fill(username);
+	await dialog.getByLabel('Password').fill('a-long-password');
+	await dialog.getByRole('button', { name: 'Add user' }).click();
+	await expect(dialog).toBeHidden();
+	await expect(page.getByRole('row').filter({ hasText: username })).toHaveClass(/dh-new/);
+});
+
+test('phone: add dialogs are full-height bottom sheets', async ({ page }) => {
+	await page.setViewportSize({ width: 390, height: 844 });
+	await signIn(page);
+	await page.goto('/groups');
+	await page.getByRole('button', { name: 'Add group' }).filter({ visible: true }).click();
+	const dialog = page.getByRole('dialog', { name: 'Add group' });
+	await expect(dialog).toBeVisible();
+	// Once it has risen into place: full width, flush with the bottom, nearly full height.
+	await expect(async () => {
+		const box = (await dialog.boundingBox())!;
+		expect(Math.round(box.x)).toBe(0);
+		expect(Math.round(box.width)).toBe(390);
+		expect(Math.round(box.y + box.height)).toBe(844);
+		expect(box.height).toBeGreaterThan(780);
+	}).toPass({ timeout: 3000 });
+	await shot(page, '19-phone-add-group');
 });

@@ -167,6 +167,26 @@
 		transform: translateX(-100%);
 	}
 }
+@keyframes dh-rise {
+	from {
+		transform: translateY(100%);
+	}
+}
+/* A row just added: a brief signal-tinted flash. */
+@keyframes dh-flash {
+	from {
+		background-color: color-mix(in oklab, var(--dh-signal) 22%, transparent);
+	}
+}
+.dh-new > td {
+	animation: dh-flash 2.4s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+	.dh-new > td {
+		animation: none;
+		background-color: color-mix(in oklab, var(--dh-signal) 10%, transparent);
+	}
+}
 @keyframes dh-fade {
 	from {
 		opacity: 0;

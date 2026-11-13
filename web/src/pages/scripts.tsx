@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Confirm } from '@/components/ui/confirm';
 import { Empty, PageHeader } from '@/components/ui/display';
 import { Field, Input, Select } from '@/components/ui/form';
+import { scriptTemplate } from '@/lib/script-templates';
 
 const editorTheme = EditorView.theme({
 	'&': { backgroundColor: 'var(--dh-surface)', color: 'var(--dh-fg)', fontSize: '13px', height: '100%' },
@@ -34,12 +35,7 @@ const editorTheme = EditorView.theme({
 	'.cm-scroller': { minHeight: '360px' },
 });
 
-const placeholder: Record<Shell, string> = {
-	powershell: 'Get-ComputerInfo | Select-Object OsName, OsVersion\n',
-	cmd: 'ver\n',
-	bash: '#!/usr/bin/env bash\nset -euo pipefail\nuname -a\n',
-	sh: 'uname -a\n',
-};
+const placeholder = scriptTemplate;
 
 export function ScriptPage() {
 	const { id: raw } = useParams({ from: '/app/scripts/$id' });

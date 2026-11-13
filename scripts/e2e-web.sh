@@ -25,7 +25,7 @@ Xvfb "$display" -screen 0 1280x720x24 >/dev/null 2>&1 & pids+=($!)
 sleep 0.5
 DISPLAY=$display xclock >/dev/null 2>&1 & pids+=($!)
 
-DESKHAND_ADDR=127.0.0.1:$port DESKHAND_DB=$work/e2e.db DESKHAND_ADMIN_PASSWORD=admin-password RUST_LOG=warn \
+DESKHAND_ADDR=127.0.0.1:$port DESKHAND_DB=$work/e2e.db DESKHAND_ADMIN_PASSWORD=admin-password DESKHAND_AGENT_SOURCE=local DESKHAND_LOGIN_RATE=100 RUST_LOG=warn \
 	"$bin/deskhand-server" >"$work/server.log" 2>&1 & pids+=($!)
 base=http://127.0.0.1:$port
 for _ in $(seq 50); do curl -sf "$base/api/v1/auth" >/dev/null && break; sleep 0.1; done
