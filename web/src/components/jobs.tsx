@@ -3,7 +3,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import { keys, useAction } from '@/api/hooks';
-import type { Device, Group, JobKind, NewJob, Page, Script } from '@/api/types';
+import type { Device, DeviceFilter, Group, JobKind, NewJob, Page, Script } from '@/api/types';
 import { AsyncCombobox, deviceOption, groupOption, scriptOption } from '@/components/ui/async-combobox';
 import { Button } from '@/components/ui/button';
 import { Field, Input, Select } from '@/components/ui/form';
@@ -52,18 +52,21 @@ function Segmented<T extends string>({
 }
 
 /**
- * Run a script or power action. With `devices`, it targets exactly those; otherwise the
- * user picks devices (searchable), a group, or everything.
+ * Run a script or power action. With `devices`, it targets exactly those; with `filter`,
+ * every device the device list's filters match (resolved by the server when the job is
+ * made); otherwise the user picks devices (searchable), a group, or everything.
  */
 export function RunDialog({
 	open,
 	onOpenChange,
 	devices: fixed,
+	filter,
 	initial,
 }: {
 	open: boolean;
 	onOpenChange: (v: boolean) => void;
 	devices?: Device[];
+	filter?: DeviceFilter;
 	initial?: { source?: string };
 }) {
 	const navigate = useNavigate();
@@ -101,12 +104,21 @@ export function RunDialog({
 
 	// How many devices it reaches, and for one device its hostname (the confirmation).
 	const reach = useQuery({
-		queryKey: ['run-reach', fixed?.map((d) => d.id) ?? null, target, picked, group],
+		queryKey: ['run-reach', fixed?.map((d) => d.id) ?? null, filter ?? null, target, picked, group],
 		enabled: open && !fixed,
 		queryFn: async () => {
-			const params =
-				target === 'all' ? '' : target === 'group' ? (group ? `group=${group}` : 'ids=') : `ids=${picked.join(',')}`;
-			if ((target === 'devices' && !picked.length) || (target === 'group' && !group)) return { total: 0, one: null };
+			const params = filter
+				? new URLSearchParams(Object.entries(filter).filter((e): e is [string, string] => !!e[1])).toString()
+				: target === 'all'
+					? ''
+					: target === 'group'
+						? group
+							? `group=${group}`
+							: 'ids='
+						: `ids=${picked.join(',')}`;
+			if (!filter && ((target === 'devices' && !picked.length) || (target === 'group' && !group))) {
+				return { total: 0, one: null };
+			}
 			const p = await api.get<Page<Device>>(`/devices?${params}&limit=1`);
 			return { total: p.total ?? 0, one: p.total === 1 ? p.items[0] : null };
 		},
@@ -132,6 +144,7 @@ export function RunDialog({
 		if (what === 'script') j.script_id = Number(scriptId);
 		else j.action = action;
 		if (fixed) j.devices = fixed.map((d) => d.id);
+		else if (filter) j.filter = filter;
 		else if (target === 'devices') j.devices = picked;
 		else if (target === 'group') j.group_id = Number(group);
 		else j.all = true;
@@ -149,7 +162,13 @@ export function RunDialog({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent
 				title={fixed?.length === 1 ? `Run on ${fixed[0].name}` : 'Run a job'}
-				description={fixed && fixed.length > 1 ? `${fixed.length} devices selected` : undefined}
+				description={
+					fixed && fixed.length > 1
+						? `${fixed.length} devices selected`
+						: filter
+							? `Every device matching the list's filters (${count} now)`
+							: undefined
+				}
 				className="max-w-xl"
 			>
 				<form onSubmit={submit} className="grid gap-3">
@@ -176,17 +195,11 @@ export function RunDialog({
 						</Field>
 					) : (
 						<Field label="Action">
-							<Select value={action} onChange={(e) => setAction(e.target.value as typeof action)}>
-								{ACTIONS.map((a) => (
-									<option key={a.value} value={a.value}>
-										{a.label}
-									</option>
-								))}
-							</Select>
+							<Select value={action} onChange={setAction} options={ACTIONS} aria-label="Action" />
 						</Field>
 					)}
 
-					{!fixed && (
+					{!fixed && !filter && (
 						<>
 							<Segmented
 								label="Target"

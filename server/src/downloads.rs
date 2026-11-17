@@ -241,6 +241,7 @@ fn safe_url(u: &str) -> bool {
     })
 }
 
+#[allow(clippy::result_large_err)]
 fn base_or_400(app: &Shared, headers: &HeaderMap) -> Result<String, Response> {
     install_base(app.public_url.as_deref(), app.trust_proxy, headers).ok_or_else(|| {
         (StatusCode::BAD_REQUEST, "can't tell this server's address; set DESKHAND_PUBLIC_URL").into_response()

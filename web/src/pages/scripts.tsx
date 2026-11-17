@@ -143,21 +143,22 @@ export function ScriptPage() {
 					/>
 				</Field>
 				<Field label="Shell">
-					<Select
+					<Select<Shell>
 						value={shell}
-						onChange={(e) => {
-							const s = e.target.value as Shell;
+						onChange={(s) => {
 							if (isNew && !dirty) setBody(placeholder[s]);
 							setShell(s);
 							setDirty(true);
 						}}
 						disabled={!canEdit}
-					>
-						<option value="powershell">PowerShell</option>
-						<option value="cmd">cmd</option>
-						<option value="bash">bash</option>
-						<option value="sh">sh</option>
-					</Select>
+						aria-label="Shell"
+						options={[
+							{ value: 'powershell', label: 'PowerShell' },
+							{ value: 'cmd', label: 'cmd' },
+							{ value: 'bash', label: 'bash' },
+							{ value: 'sh', label: 'sh' },
+						]}
+					/>
 				</Field>
 				<Field label="Timeout (s)">
 					<Input

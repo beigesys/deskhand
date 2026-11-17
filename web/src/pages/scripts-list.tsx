@@ -95,12 +95,17 @@ export function ScriptsPage() {
 				</Field>
 				<div className="grid gap-3 sm:grid-cols-2">
 					<Field label="Shell">
-						<Select name="shell" defaultValue="powershell">
-							<option value="powershell">PowerShell</option>
-							<option value="cmd">cmd</option>
-							<option value="bash">bash</option>
-							<option value="sh">sh</option>
-						</Select>
+						<Select
+							name="shell"
+							defaultValue="powershell"
+							aria-label="Shell"
+							options={[
+								{ value: 'powershell', label: 'PowerShell' },
+								{ value: 'cmd', label: 'cmd' },
+								{ value: 'bash', label: 'bash' },
+								{ value: 'sh', label: 'sh' },
+							]}
+						/>
 					</Field>
 					<Field label="Timeout (s)">
 						<Input name="timeout_s" type="number" min={1} max={86400} defaultValue={300} required />

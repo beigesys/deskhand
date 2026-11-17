@@ -1,6 +1,6 @@
 import * as React from 'react';
-import { Checkbox as CheckboxPrimitive } from 'radix-ui';
-import { Check, Minus } from 'lucide-react';
+import { Checkbox as CheckboxPrimitive, Select as SelectPrimitive } from 'radix-ui';
+import { Check, ChevronDown, Minus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const field =
@@ -18,13 +18,91 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTML
 );
 Textarea.displayName = 'Textarea';
 
-/** A native select: dense, accessible and keyboard friendly as is. */
-export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttributes<HTMLSelectElement>>(
-	({ className, ...props }, ref) => (
-		<select ref={ref} className={cn(field, 'cursor-pointer pr-6', className)} {...props} />
-	),
-);
-Select.displayName = 'Select';
+export interface SelectOption<T extends string> {
+	value: T;
+	label: React.ReactNode;
+}
+
+// Radix reserves '' for "nothing picked"; '' is a real value here ("any").
+const EMPTY = '__empty__';
+
+/**
+ * Pick one of a small fixed set (a status, an OS, a shell); anything that can grow is an
+ * AsyncCombobox. `prefix` labels the trigger ("OS: Windows") so a filter bar reads on its own.
+ * Controlled with `value`/`onChange`, or with `name`/`defaultValue` inside a form.
+ */
+export function Select<T extends string>({
+	value,
+	defaultValue,
+	onChange,
+	name,
+	options,
+	prefix,
+	className,
+	disabled,
+	id,
+	...props
+}: {
+	value?: T;
+	defaultValue?: T;
+	onChange?: (v: T) => void;
+	name?: string;
+	options: SelectOption<T>[];
+	prefix?: string;
+	className?: string;
+	disabled?: boolean;
+	id?: string;
+	'aria-label'?: string;
+}) {
+	const enc = (v: T | undefined) => (v === '' ? EMPTY : v);
+	return (
+		<SelectPrimitive.Root
+			value={enc(value)}
+			defaultValue={enc(defaultValue)}
+			onValueChange={(v) => onChange?.((v === EMPTY ? '' : v) as T)}
+			name={name}
+			disabled={disabled}
+		>
+			<SelectPrimitive.Trigger
+				id={id}
+				aria-label={props['aria-label']}
+				className={cn(field, 'inline-flex cursor-pointer items-center justify-between gap-2 text-left', className)}
+			>
+				<span className="min-w-0 truncate">
+					{prefix && <span className="text-muted">{prefix}: </span>}
+					<SelectPrimitive.Value />
+				</span>
+				<SelectPrimitive.Icon>
+					<ChevronDown className="size-3.5 shrink-0 text-muted" />
+				</SelectPrimitive.Icon>
+			</SelectPrimitive.Trigger>
+			<SelectPrimitive.Portal>
+				<SelectPrimitive.Content
+					position="popper"
+					sideOffset={4}
+					className="z-50 max-h-[var(--radix-select-content-available-height)] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded border border-line-strong bg-surface"
+				>
+					<SelectPrimitive.Viewport className="py-1">
+						{options.map((o) => (
+							<SelectPrimitive.Item
+								key={o.value}
+								value={o.value === '' ? EMPTY : o.value}
+								className="flex min-h-8 cursor-pointer select-none items-center gap-2 px-2.5 py-1 text-[13px] outline-none data-[highlighted]:bg-chip max-md:min-h-10"
+							>
+								<span className="grid size-3.5 shrink-0 place-items-center">
+									<SelectPrimitive.ItemIndicator>
+										<Check className="size-3.5 text-signal" />
+									</SelectPrimitive.ItemIndicator>
+								</span>
+								<SelectPrimitive.ItemText>{o.label}</SelectPrimitive.ItemText>
+							</SelectPrimitive.Item>
+						))}
+					</SelectPrimitive.Viewport>
+				</SelectPrimitive.Content>
+			</SelectPrimitive.Portal>
+		</SelectPrimitive.Root>
+	);
+}
 
 export function Field({
 	label,

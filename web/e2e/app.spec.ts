@@ -50,7 +50,8 @@ test('sign in, see the live device, run a script and read its output', async ({ 
 	await page.getByRole('button', { name: 'New script' }).click();
 	const newScript = page.getByRole('dialog', { name: 'New script' });
 	await newScript.getByLabel('Name').fill('Who am I');
-	await newScript.getByLabel('Shell').selectOption('bash');
+	await newScript.getByRole('combobox', { name: 'Shell' }).click();
+	await page.getByRole('option', { name: 'bash', exact: true }).click();
 	await newScript.getByRole('button', { name: 'Create and edit' }).click();
 	await expect(newScript).toBeHidden();
 	await expect(page.getByLabel('Name')).toHaveValue('Who am I');
@@ -75,6 +76,18 @@ test('sign in, see the live device, run a script and read its output', async ({ 
 	await expect(page.locator('pre').filter({ hasText: 'hello-from-' })).toBeVisible({ timeout: 20_000 });
 	await expect(page.getByText('ok', { exact: true }).first()).toBeVisible();
 	await shot(page, '06-job');
+
+	// The device's Jobs tab lists the run; the device list filters with styled selects.
+	await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: /Devices/ }).click();
+	await page.getByRole('combobox', { name: 'Status' }).click();
+	await page.getByRole('option', { name: 'Online', exact: true }).click();
+	await expect(page).toHaveURL(/status=online/);
+	await expect(row).toBeVisible();
+	await row.getByRole('checkbox').click();
+	await expect(page.getByTestId('selected-count').filter({ visible: true })).toHaveText(/^1 of \d+ selected$/);
+	await row.getByRole('link', { name: device }).click();
+	await page.getByRole('tab', { name: 'Jobs' }).click();
+	await expect(page.getByRole('link', { name: /Who am I/ })).toBeVisible();
 
 	// Admin pages render.
 	for (const [link, heading] of [
@@ -125,7 +138,7 @@ test('phone: drawer navigation and device cards', async ({ page }) => {
 	// Select mode from the top bar.
 	await page.getByRole('button', { name: 'Select' }).click();
 	await card.getByRole('checkbox').click();
-	await expect(page.getByText('1 selected').filter({ visible: true })).toBeVisible();
+	await expect(page.getByTestId('selected-count').filter({ visible: true })).toHaveText(/^1 of \d+ selected$/);
 	await shot(page, '13-phone-select');
 	await page.getByRole('button', { name: 'Done' }).click();
 

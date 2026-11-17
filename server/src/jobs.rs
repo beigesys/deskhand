@@ -406,14 +406,15 @@ impl Db {
     }
 
     /// The device's latest runs with their job names, for its page.
-    pub fn device_runs(&self, device: &str, limit: i64) -> R<Vec<(Run, i64, String)>> {
+    /// A device's runs with their jobs' ids and names, newest first, older than run `before`.
+    pub fn device_runs(&self, device: &str, before: Option<i64>, limit: i64) -> R<Vec<(Run, i64, String)>> {
         let c = self.c();
         let mut s = c.prepare(&format!(
             "SELECT {RUN_COLS}, j.id, j.name FROM job_runs r JOIN jobs j ON j.id = r.job_id
              LEFT JOIN devices d ON d.id = r.device_id
-             WHERE r.device_id = ?1 ORDER BY r.id DESC LIMIT ?2"
+             WHERE r.device_id = ?1 AND (?2 IS NULL OR r.id < ?2) ORDER BY r.id DESC LIMIT ?3"
         ))?;
-        let rows = s.query_map(params![device, limit], |r| Ok((run_row(r)?, r.get(11)?, r.get(12)?)))?;
+        let rows = s.query_map(params![device, before, limit], |r| Ok((run_row(r)?, r.get(11)?, r.get(12)?)))?;
         rows.collect()
     }
 

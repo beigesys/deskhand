@@ -171,41 +171,11 @@ async fn main() {
         device_events: tokio::sync::broadcast::channel(256).0,
     });
     tokio::spawn(jobs::scheduler(app.clone()));
-    // The server-rendered pages, kept at /classic/ until the web app covers everything.
-    let classic = Router::new()
-        .route("/", get(ui::devices))
-        .route("/login", get(auth::login_page).post(auth::login))
-        .route("/logout", post(auth::logout))
-        .route("/setup", get(auth::setup_page).post(auth::setup))
-        .route("/devices.csv", get(inventory::csv))
-        .route("/devices/{id}", get(inventory::detail))
-        .route("/devices/{id}/refresh", post(inventory::refresh))
-        .route("/devices/{id}/rename", post(ui::rename_device))
-        .route("/devices/{id}/move", post(ui::move_device))
-        .route("/devices/{id}/delete", post(ui::delete_device))
-        .route("/groups", get(ui::groups).post(ui::add_group))
-        .route("/groups/{id}/delete", post(ui::delete_group))
-        .route("/enroll", get(ui::enroll).post(ui::create_token))
-        .route("/enroll/{id}/revoke", post(ui::revoke_token))
-        .route("/users", get(ui::users).post(ui::add_user))
-        .route("/users/{id}/role", post(ui::set_role))
-        .route("/users/{id}/email", post(ui::set_email))
-        .route("/users/{id}/delete", post(ui::delete_user))
-        .route("/audit", get(ui::audit))
-        .route("/scripts", get(jobs_ui::scripts).post(jobs_ui::create_script))
-        .route("/scripts/new", get(jobs_ui::new_script))
-        .route("/scripts/{id}", get(jobs_ui::script).post(jobs_ui::update_script))
-        .route("/scripts/{id}/delete", post(jobs_ui::delete_script))
-        .route("/jobs", get(jobs_ui::jobs_list).post(jobs_ui::create_job))
-        .route("/jobs/new", get(jobs_ui::new_job))
-        .route("/jobs/{id}", get(jobs_ui::job))
-        .route("/jobs/{id}/events", get(jobs_ui::events))
-        .route("/jobs/{id}/{op}", post(jobs_ui::job_action))
-        .layer(axum::middleware::from_fn(web::classic_paths));
     let router = Router::new()
         .nest("/api/v1", api::router())
-        .nest("/classic", classic)
-        .route("/classic/", get(|| async { Redirect::permanent("/classic") }))
+        // The server-rendered pages are gone; old bookmarks land in the app.
+        .route("/classic", get(|| async { Redirect::permanent("/") }))
+        .route("/classic/{*rest}", get(|| async { Redirect::permanent("/") }))
         .route("/auth/{provider}/start", get(auth::sso_start))
         .route("/auth/{provider}/callback", get(auth::sso_callback))
         .route("/api/enroll", post(enroll))
@@ -348,7 +318,7 @@ async fn control(app: Shared, id: String, ip: String, ws: WebSocket) {
                 if wtx.send(Message::Ping(Default::default())).await.is_err() { break }
                 // Last seen, every few minutes while it stays up.
                 ticks += 1;
-                if ticks % 15 == 0 {
+                if ticks.is_multiple_of(15) {
                     let _ = app.db.device_seen(&id, None, None, now());
                 }
             }

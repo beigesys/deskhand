@@ -16,6 +16,7 @@ import type {
 	Device,
 	DeviceDetail,
 	DeviceEvent,
+	DeviceRun,
 	EnrollToken,
 	Group,
 	Job,
@@ -35,6 +36,7 @@ export const keys = {
 	devices: ['devices'] as const,
 	summary: ['summary'] as const,
 	device: (id: string) => ['device', id] as const,
+	deviceRuns: (id: string) => ['device-runs', id] as const,
 	groups: ['groups'] as const,
 	tokens: ['enroll-tokens'] as const,
 	agentDownloads: ['agent-downloads'] as const,
@@ -111,7 +113,9 @@ export const useUsers = (q?: string) => usePaged<User & { sso_enabled?: boolean 
 export const useScripts = (q?: string) => usePaged<Script>(keys.scripts, '/scripts', { q });
 export const useJobs = (q?: string, opts: { limit?: number } = {}) =>
 	usePaged<Job>(keys.jobs, '/jobs', { q }, { refetchInterval: 10_000, ...opts });
-export const useRuns = (id: number, f: { status?: string; q?: string }) => usePaged<Run>(keys.runs(id), `/jobs/${id}/runs`, f);
+export const useDeviceRuns = (id: string) =>
+	usePaged<DeviceRun>(keys.deviceRuns(id), `/devices/${id}/runs`, {}, { refetchInterval: 10_000 });
+export const useRuns =(id: number, f: { status?: string; q?: string }) => usePaged<Run>(keys.runs(id), `/jobs/${id}/runs`, f);
 export const useAudit = (f: { action?: string; q?: string; user?: string; device?: string }) =>
 	usePaged<AuditRow>(keys.audit, '/audit', f, { limit: 100 });
 

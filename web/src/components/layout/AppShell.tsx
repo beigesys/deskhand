@@ -2,7 +2,6 @@ import * as React from 'react';
 import { Link, Outlet, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-	ExternalLink,
 	FileCode2,
 	FolderTree,
 	Gauge,
@@ -111,9 +110,6 @@ function Rail({ onNavigate }: { onNavigate?: () => void }) {
 						<PaletteIcon className="size-3.5" /> Style guide
 					</Link>
 				)}
-				<a href="/classic" className="flex items-center gap-2 py-1 hover:text-rail-fg max-md:h-10">
-					<ExternalLink className="size-3.5" /> Classic pages
-				</a>
 			</div>
 		</nav>
 	);

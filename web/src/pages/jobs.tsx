@@ -250,14 +250,20 @@ export function JobPage() {
 							aria-label="Search runs by device"
 							className="max-w-56"
 						/>
-						<Select className="w-auto" value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Run status">
-							<option value="">Any status</option>
-							{['queued', 'running', 'ok', 'failed', 'timeout', 'offline'].map((s) => (
-								<option key={s} value={s}>
-									{s} {counts[s] ? `(${counts[s]})` : ''}
-								</option>
-							))}
-						</Select>
+						<Select
+							className="w-auto"
+							value={status}
+							onChange={setStatus}
+							aria-label="Run status"
+							prefix="Status"
+							options={[
+								{ value: '', label: 'Any' },
+								...['queued', 'running', 'ok', 'failed', 'timeout', 'offline'].map((s) => ({
+									value: s,
+									label: counts[s] ? `${s} (${counts[s]})` : s,
+								})),
+							]}
+						/>
 					</div>
 					{runs.length === 0 ? (
 						<Empty>

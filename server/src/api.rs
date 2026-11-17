@@ -1,5 +1,5 @@
-//! `/api/v1`: the JSON API the web app uses. Same sessions, roles and Origin check as the
-//! classic pages; mutations take JSON bodies, which a cross-site form can't send.
+//! `/api/v1`: the JSON API the web app uses. Cookie sessions, roles and an Origin check;
+//! mutations take JSON bodies, which a cross-site form can't send.
 //!
 //! Errors are `{"error": "..."}` with 400 (bad input), 401 (not signed in), 403 (role),
 //! 404, 409 (conflict) or 500.
@@ -32,11 +32,13 @@ pub fn router() -> Router<Shared> {
         .route("/events", get(events))
         .route("/devices", get(devices))
         .route("/devices/summary", get(device_summary))
+        .route("/devices/move", post(move_devices))
         .route("/devices.csv", get(crate::inventory::csv))
         .route("/devices/{id}", get(device).delete(delete_device))
         .route("/devices/{id}/rename", post(rename_device))
         .route("/devices/{id}/move", post(move_device))
         .route("/devices/{id}/refresh", post(refresh_device))
+        .route("/devices/{id}/runs", get(device_runs))
         .route("/groups", get(groups).post(add_group))
         .route("/groups/{id}", delete(delete_group))
         .route("/enroll-tokens", get(enroll_tokens).post(add_enroll_token))
@@ -388,34 +390,9 @@ async fn devices(State(app): State<Shared>, headers: HeaderMap, Query(f): Query<
     let online = online_map(&app);
     let now = now();
     let limit = f.list.limit();
-    let ids = f.list.ids_json(false);
-    let on = online_json(&online);
-    let mut q = crate::db::DeviceQuery {
-        q: f.list.q(),
-        group: match f.group.as_deref() {
-            None | Some("") => None,
-            Some("none") => Some(None),
-            Some(g) => Some(Some(g.parse().map_err(|_| bad("group is an id or none"))?)),
-        },
-        platform: f.os.as_deref().filter(|o| !o.is_empty()),
-        only: ids,
-        after: f.list.after::<(String, String)>(),
-        limit: limit + 1,
-        ..Default::default()
-    };
-    match f.status.as_deref() {
-        Some("online") => q.only = Some(match q.only.take() {
-            // Both a selection and online: the selection's online ones.
-            Some(sel) => {
-                let sel: Vec<String> = serde_json::from_str(&sel).unwrap_or_default();
-                serde_json::to_string(&sel.into_iter().filter(|i| online.contains_key(i)).collect::<Vec<_>>()).unwrap()
-            }
-            None => on.clone(),
-        }),
-        Some("offline") => q.except = Some(on.clone()),
-        Some("attention") => q.attention = Some((on.clone(), now - OFFLINE_ATTENTION)),
-        _ => {}
-    }
+    let mut q = device_query(f.list.q(), f.group.as_deref(), f.status.as_deref(), f.os.as_deref(), f.list.ids_json(false), &online, now)?;
+    q.after = f.list.after::<(String, String)>();
+    q.limit = limit + 1;
     let (rows, total) = app.db.device_page(&q)?;
     let (rows, next) = page(rows, limit, |d| (d.name.clone(), d.id.clone()));
     let items = rows
@@ -426,6 +403,71 @@ async fn devices(State(app): State<Shared>, headers: HeaderMap, Query(f): Query<
         })
         .collect();
     Ok(Json(Page { items, next_cursor: next, total: Some(total) }))
+}
+
+/// The device list's filters as a query: search, group (an id or `none`), status
+/// (`online`, `offline`, `attention`) and OS, within `only` (a JSON array of ids) if given.
+fn device_query<'a>(
+    search: Option<&'a str>,
+    group: Option<&str>,
+    status: Option<&str>,
+    os: Option<&'a str>,
+    only: Option<String>,
+    online: &HashMap<String, i64>,
+    now: i64,
+) -> Result<crate::db::DeviceQuery<'a>, ApiError> {
+    let on = online_json(online);
+    let mut q = crate::db::DeviceQuery {
+        q: search,
+        group: match group {
+            None | Some("") => None,
+            Some("none") => Some(None),
+            Some(g) => Some(Some(g.parse().map_err(|_| bad("group is an id or none"))?)),
+        },
+        platform: os.filter(|o| !o.is_empty()),
+        only,
+        ..Default::default()
+    };
+    match status {
+        Some("online") => q.only = Some(match q.only.take() {
+            // Both a selection and online: the selection's online ones.
+            Some(sel) => {
+                let sel: Vec<String> = serde_json::from_str(&sel).unwrap_or_default();
+                serde_json::to_string(&sel.into_iter().filter(|i| online.contains_key(i)).collect::<Vec<_>>()).unwrap()
+            }
+            None => on,
+        }),
+        Some("offline") => q.except = Some(on),
+        Some("attention") => q.attention = Some((on, now - OFFLINE_ATTENTION)),
+        _ => {}
+    }
+    Ok(q)
+}
+
+/// The most devices one bulk action reaches by filter.
+const MAX_BULK: i64 = 10_000;
+
+/// "Every device matching": the device list's filters, sent with a bulk action instead of
+/// a list of ids.
+#[derive(Deserialize, Default)]
+struct DeviceFilter {
+    q: Option<String>,
+    group: Option<String>,
+    status: Option<String>,
+    os: Option<String>,
+}
+
+/// The ids of every device matching `f`, as the device list would show them now.
+fn filtered_ids(app: &Shared, f: &DeviceFilter) -> Result<Vec<String>, ApiError> {
+    let online = online_map(app);
+    let search = f.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
+    let mut q = device_query(search, f.group.as_deref(), f.status.as_deref(), f.os.as_deref(), None, &online, now())?;
+    q.limit = MAX_BULK + 1;
+    let (rows, _) = app.db.device_page(&q)?;
+    if rows.len() as i64 > MAX_BULK {
+        return Err(bad(format!("that matches more than {MAX_BULK} devices; narrow the filter")));
+    }
+    Ok(rows.into_iter().map(|d| d.id).collect())
 }
 
 #[derive(Serialize)]
@@ -465,7 +507,6 @@ struct DeviceDetail {
     device: DeviceOut,
     inventory: Option<Inventory>,
     inventory_at: Option<i64>,
-    runs: Vec<DeviceRun>,
 }
 
 #[derive(Serialize)]
@@ -483,18 +524,26 @@ async fn device(State(app): State<Shared>, headers: HeaderMap, Path(id): Path<St
     let d = rows.pop().ok_or_else(|| err(StatusCode::NOT_FOUND, "no such device"))?;
     let inv = app.db.inventory(&id)?;
     let since = online_map(&app).get(&id).copied();
-    let runs = app
-        .db
-        .device_runs(&id, 50)?
-        .into_iter()
-        .map(|(r, job_id, job_name)| DeviceRun { job_id, job_name, run: run_out(r) })
-        .collect();
     Ok(Json(DeviceDetail {
         device: device_out(d, since, now()),
         inventory_at: inv.as_ref().map(|(t, _)| *t),
         inventory: inv.map(|(_, i)| i),
-        runs,
     }))
+}
+
+/// `GET /api/v1/devices/{id}/runs`: the device's job runs, newest first.
+async fn device_runs(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(f): Query<ListQuery>,
+) -> Api<Page<DeviceRun>> {
+    need(&app, &headers, Role::Viewer)?;
+    let limit = f.limit();
+    let rows = app.db.device_runs(&id, f.after(), limit + 1)?;
+    let (rows, next) = page(rows, limit, |(r, _, _)| r.id);
+    let items = rows.into_iter().map(|(r, job_id, job_name)| DeviceRun { job_id, job_name, run: run_out(r) }).collect();
+    Ok(Json(Page { items, next_cursor: next, total: None }))
 }
 
 #[derive(Deserialize)]
@@ -543,6 +592,39 @@ async fn move_device(
     let to = b.group_id.map_or("no group".into(), |g| format!("group {g}"));
     app.db.audit(now(), Some(user.id), Some(&id), "device.move", &to);
     Ok(ok())
+}
+
+/// `POST /api/v1/devices/move`: many devices into a group (or none), by `devices` (ids)
+/// or `filter` (every device the list's filters match).
+#[derive(Deserialize)]
+struct BulkMoveBody {
+    group_id: Option<i64>,
+    devices: Option<Vec<String>>,
+    filter: Option<DeviceFilter>,
+}
+
+async fn move_devices(State(app): State<Shared>, headers: HeaderMap, Json(b): Json<BulkMoveBody>) -> Api<serde_json::Value> {
+    let user = need(&app, &headers, Role::Admin)?;
+    if let Some(g) = b.group_id {
+        if !app.db.group_exists(g)? {
+            return Err(bad("no such group"));
+        }
+    }
+    let ids = match (b.filter, b.devices) {
+        (Some(f), None) => filtered_ids(&app, &f)?,
+        (None, Some(ids)) => ids,
+        _ => return Err(bad("give devices or a filter")),
+    };
+    let to = b.group_id.map_or("no group".into(), |g| format!("group {g}"));
+    let now = now();
+    let mut moved = 0;
+    for id in &ids {
+        if app.db.move_device(id, b.group_id)? > 0 {
+            app.db.audit(now, Some(user.id), Some(id), "device.move", &to);
+            moved += 1;
+        }
+    }
+    Ok(Json(json!({ "moved": moved })))
 }
 
 async fn delete_device(State(app): State<Shared>, headers: HeaderMap, Path(id): Path<String>) -> Api<serde_json::Value> {
@@ -653,7 +735,7 @@ async fn enroll_tokens(State(app): State<Shared>, headers: HeaderMap, Query(f): 
         .map(|t| TokenOut { id: t.id, group: t.group, expires: t.expires, max_uses: t.max_uses, uses: t.uses })
         .collect();
     let mut rows = rows;
-    rows.sort_by(|a, b| b.id.cmp(&a.id));
+    rows.sort_by_key(|t| std::cmp::Reverse(t.id));
     rows.truncate(f.limit() as usize + 1);
     let (items, next) = page(rows, f.limit(), |t| t.id);
     Ok(Json(Page { items, next_cursor: next, total: None }))
@@ -1018,7 +1100,7 @@ struct ScriptBody {
     timeout_s: i64,
 }
 
-/// Checked the same way as the classic form.
+/// Checked by the same code as job requests.
 fn script_fields(b: ScriptBody) -> Result<(String, ScriptShell, String, i64), ApiError> {
     let f = vec![
         ("name".to_owned(), b.name.trim().to_owned()),
@@ -1201,7 +1283,7 @@ async fn job_runs(
     Ok(Json(Page { items: rows.into_iter().map(run_out).collect(), next_cursor: next, total: None }))
 }
 
-/// `POST /api/v1/jobs`. Exactly one of `script_id` / `action`, and one of `devices` /
+/// `POST /api/v1/jobs`. Exactly one of `script_id` / `action`, and one of `devices` / `filter` /
 /// `group_id` / `all`. Reboot and shutdown need `confirm`: the hostname for one device,
 /// else the number of devices.
 #[derive(Deserialize)]
@@ -1212,6 +1294,8 @@ struct JobBody {
     delay_s: Option<u32>,
     message: Option<String>,
     devices: Option<Vec<String>>,
+    /// Every device the device list's filters match, resolved now.
+    filter: Option<DeviceFilter>,
     group_id: Option<i64>,
     #[serde(default)]
     all: bool,
@@ -1222,7 +1306,7 @@ struct JobBody {
 
 async fn add_job(State(app): State<Shared>, headers: HeaderMap, Json(b): Json<JobBody>) -> Api<serde_json::Value> {
     let user = need(&app, &headers, Role::Operator)?;
-    // The same fields the classic job form posts, checked by the same code.
+    // Turned into form-style fields and checked by one function.
     let mut f: Vec<(String, String)> = vec![];
     let mut put = |k: &str, v: String| f.push((k.to_owned(), v));
     match (b.script_id, b.action) {
@@ -1235,6 +1319,11 @@ async fn add_job(State(app): State<Shared>, headers: HeaderMap, Json(b): Json<Jo
     } else if let Some(g) = b.group_id {
         put("target", "group".into());
         put("group", g.to_string());
+    } else if let Some(filter) = b.filter {
+        put("target", "devices".into());
+        for d in filtered_ids(&app, &filter)? {
+            put("device", d);
+        }
     } else {
         put("target", "devices".into());
         for d in b.devices.unwrap_or_default() {
