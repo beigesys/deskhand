@@ -131,6 +131,28 @@ The device list shows each machine online or offline. **Desktop** opens its scre
 (`/d/{id}/`); **Shell** opens a terminal on it (`/d/{id}/shell`: PowerShell on Windows,
 `$SHELL` elsewhere). Click the device name for its inventory.
 
+
+## Container (Docker, Railway)
+
+`Dockerfile` builds deskhand-server from source into a 23 MB image with nothing in it but
+the static binary. Tagged releases also publish `ghcr.io/beigesys/deskhand:{version}` for
+linux/amd64 and linux/arm64. Keep `/data` on a volume: the database and cached agent
+builds live there.
+
+```sh
+docker run -d -p 8080:8080 -v deskhand:/data \
+  -e DESKHAND_PUBLIC_URL=https://deskhand.example.com ghcr.io/beigesys/deskhand:latest
+```
+
+The image sets `DESKHAND_TRUST_PROXY=1`, so run it behind a TLS proxy. It listens on
+`$PORT` when the platform sets one.
+
+**Railway:** new project → deploy from this GitHub repo (it reads `railway.json` and
+builds the `Dockerfile`), add a volume mounted at `/data`, and generate a domain.
+`DESKHAND_PUBLIC_URL` defaults to `https://$RAILWAY_PUBLIC_DOMAIN`. Set
+`DESKHAND_ADMIN_PASSWORD` for the first sign-in, or read the setup link from the deploy
+logs. Keep one replica: SQLite and the agents' connections live in that one process.
+
 ## The web app
 
 - `apps/web/`: React 19, TypeScript, Tailwind v4, TanStack Router and Query, Radix primitives

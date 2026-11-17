@@ -3,7 +3,7 @@
 //! agent's tunnel. `/mcp` serves MCP clients signed in through OAuth ([`mcp`]).
 //!
 //! Settings come from the environment:
-//! - `DESKHAND_ADDR` (default `0.0.0.0:8080`)
+//! - `DESKHAND_ADDR` (default `0.0.0.0:$PORT`, or `0.0.0.0:8080` without `PORT`)
 //! - `DESKHAND_DB` (default `./deskhand.db`): the SQLite database
 //! - `DESKHAND_ADMIN_PASSWORD` (optional): with no users yet, creates `admin` with this
 //!   password; without it the server prints a one-time setup link
@@ -146,10 +146,19 @@ pub fn same(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0, |d, (x, y)| d | (x ^ y)) == 0
 }
 
+/// DESKHAND_PUBLIC_URL, or on Railway its public domain.
+pub fn public_url() -> Option<String> {
+    let set = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
+    set("DESKHAND_PUBLIC_URL").or_else(|| set("RAILWAY_PUBLIC_DOMAIN").map(|d| format!("https://{}", d.trim())))
+}
+
 #[tokio::main]
 async fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    let addr = std::env::var("DESKHAND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());
+    // PORT: what hosts like Railway tell the app to listen on.
+    let addr = std::env::var("DESKHAND_ADDR")
+        .or_else(|_| std::env::var("PORT").map(|p| format!("0.0.0.0:{p}")))
+        .unwrap_or_else(|_| "0.0.0.0:8080".into());
     let db_path = std::env::var("DESKHAND_DB").unwrap_or_else(|_| "deskhand.db".into());
     let db = Db::open(&db_path).unwrap_or_else(|e| {
         eprintln!("can't open the database {db_path}: {e}");
@@ -181,7 +190,7 @@ async fn main() {
         mfa: mfa::Challenges::default(),
         require_mfa: std::env::var("DESKHAND_REQUIRE_MFA").is_ok_and(|v| v == "1"),
         download_limit: auth::RateLimit::with_max(downloads::DOWNLOADS_PER_MINUTE),
-        public_url: std::env::var("DESKHAND_PUBLIC_URL").ok().filter(|v| !v.is_empty()),
+        public_url: public_url(),
         builds: downloads::Agents::from_env(&db_path),
         updates: updates::Updates::from_env(),
         sso: sso::Sso::from_env(),
@@ -202,6 +211,7 @@ async fn main() {
         .route("/auth/{provider}/callback", get(auth::sso_callback))
         .route("/api/enroll", post(enroll))
         .route("/dl/{name}", get(downloads::download))
+        .route("/healthz", get(|| async { "ok" }))
         .route("/install.sh", get(downloads::install_sh))
         .route("/install.ps1", get(downloads::install_ps1))
         .route("/agent/connect", get(agent_connect))

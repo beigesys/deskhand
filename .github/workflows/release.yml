@@ -1,5 +1,6 @@
 # Tag vX.Y.Z (scripts/release.sh) and push the tag: this builds every static binary,
-# then publishes them with SHA256SUMS as the GitHub Release for that tag.
+# then publishes them with SHA256SUMS as the GitHub Release for that tag, and the server as
+# the container image ghcr.io/<owner>/deskhand (linux/amd64 and linux/arm64).
 # Run it by hand (workflow_dispatch) for a dry run: it builds and checks, publishes nothing.
 name: Release
 
@@ -53,3 +54,48 @@ jobs:
         run: |
           echo "Dry run: built and checked these, published nothing." >> "$GITHUB_STEP_SUMMARY"
           { echo '```'; ls -l dist; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  image:
+    name: Container image
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          pattern: deskhand-*
+          path: dist
+          merge-multiple: true
+      - name: Lay out the build context
+        run: |
+          mkdir -p ctx/amd64 ctx/arm64 ctx/rootfs/data ctx/rootfs/tmp
+          chmod 1777 ctx/rootfs/tmp
+          install -m 755 dist/deskhand-server-linux-x86_64 ctx/amd64/deskhand-server
+          install -m 755 dist/deskhand-server-linux-aarch64 ctx/arm64/deskhand-server
+          cp Dockerfile.release ctx/Dockerfile
+      - id: meta
+        uses: docker/metadata-action@v5.8.0
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/deskhand
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=sha
+      - uses: docker/setup-buildx-action@v3.11.1
+      - uses: docker/login-action@v3.5.0
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@v6.18.0
+        with:
+          context: ctx
+          platforms: linux/amd64,linux/arm64
+          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

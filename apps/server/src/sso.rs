@@ -201,7 +201,7 @@ impl Sso {
     /// From the environment; providers with missing settings are left off with a warning.
     pub fn from_env() -> Sso {
         let mut providers = Vec::new();
-        let public = env("DESKHAND_PUBLIC_URL");
+        let public = crate::public_url();
         let wants_any = ["DESKHAND_ENTRA_CLIENT_ID", "DESKHAND_GOOGLE_CLIENT_ID", "DESKHAND_GITHUB_CLIENT_ID"]
             .iter()
             .any(|v| env(v).is_some());

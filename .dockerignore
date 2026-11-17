@@ -1,0 +1,8 @@
+.git
+.claude
+target
+target-*
+**/node_modules
+apps/web/dist
+apps/web/test-results
+vendor/libvpx

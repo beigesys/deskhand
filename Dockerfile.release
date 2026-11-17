@@ -1,0 +1,10 @@
+# The release image: the static deskhand-server from the Release workflow on an empty
+# image, for linux/amd64 and linux/arm64 (ghcr.io/beigesys/deskhand). `Dockerfile` builds
+# the same thing from source.
+FROM scratch
+ARG TARGETARCH
+COPY rootfs/ /
+COPY ${TARGETARCH}/deskhand-server /deskhand-server
+ENV DESKHAND_DB=/data/deskhand.db DESKHAND_TRUST_PROXY=1
+EXPOSE 8080
+ENTRYPOINT ["/deskhand-server"]
