@@ -315,6 +315,7 @@ impl Db {
         for (i, m) in MIGRATIONS.iter().enumerate().skip(version) {
             c.execute_batch(&format!("BEGIN; {m}; PRAGMA user_version = {}; COMMIT;", i + 1))?;
         }
+        c.execute_batch(crate::db_oauth::SCHEMA)?;
         Ok(Db(Mutex::new(c)))
     }
 

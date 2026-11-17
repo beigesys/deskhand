@@ -54,3 +54,26 @@ export const attentionLabel: Record<string, string> = {
 	av_off: 'Antivirus off',
 	offline_7d: 'Offline 7d+',
 };
+
+/** Where to go after signing in with SSO, which always comes back to `/`. */
+const NEXT_KEY = 'deskhand.next';
+
+export function rememberNext(next: string | undefined) {
+	try {
+		if (next && /^\/(?!\/|login|setup)/.test(next)) sessionStorage.setItem(NEXT_KEY, JSON.stringify({ next, at: Date.now() }));
+	} catch {
+		/* private mode: SSO lands on the overview */
+	}
+}
+
+/** The page `rememberNext` kept, if it's from the last ten minutes; forgets it either way. */
+export function takeNext(): string | null {
+	try {
+		const raw = sessionStorage.getItem(NEXT_KEY);
+		sessionStorage.removeItem(NEXT_KEY);
+		const v = raw ? (JSON.parse(raw) as { next: string; at: number }) : null;
+		return v && Date.now() - v.at < 10 * 60_000 ? v.next : null;
+	} catch {
+		return null;
+	}
+}

@@ -56,6 +56,7 @@ pub fn router() -> Router<Shared> {
         .route("/jobs/{id}/events", get(jobs_ui::events))
         .route("/jobs/{id}/runs", get(job_runs))
         .route("/jobs/{id}/{op}", post(job_op))
+        .merge(crate::mcp::api_routes())
         .fallback(|| async { ApiError(StatusCode::NOT_FOUND, "no such API endpoint".into()) })
 }
 
@@ -1201,14 +1202,18 @@ async fn job_runs(
     Ok(Json(Page { items: rows.into_iter().map(run_out).collect(), next_cursor: next, total: None }))
 }
 
-/// `POST /api/v1/jobs`. Exactly one of `script_id` / `action`, and one of `devices` /
-/// `group_id` / `all`. Reboot and shutdown need `confirm`: the hostname for one device,
-/// else the number of devices.
+/// `POST /api/v1/jobs`. Exactly one of `script_id` / `action` / `command` (with `shell`),
+/// and one of `devices` / `group_id` / `all`. Reboot and shutdown need `confirm`: the
+/// hostname for one device, else the number of devices.
 #[derive(Deserialize)]
 struct JobBody {
     name: Option<String>,
     script_id: Option<i64>,
     action: Option<String>,
+    /// A one-off command run by `shell`, with an optional `timeout_s`.
+    command: Option<String>,
+    shell: Option<String>,
+    timeout_s: Option<i64>,
     delay_s: Option<u32>,
     message: Option<String>,
     devices: Option<Vec<String>>,
@@ -1225,10 +1230,18 @@ async fn add_job(State(app): State<Shared>, headers: HeaderMap, Json(b): Json<Jo
     // The same fields the classic job form posts, checked by the same code.
     let mut f: Vec<(String, String)> = vec![];
     let mut put = |k: &str, v: String| f.push((k.to_owned(), v));
-    match (b.script_id, b.action) {
-        (Some(id), None) => put("source", format!("script:{id}")),
-        (None, Some(a)) => put("source", format!("action:{a}")),
-        _ => return Err(bad("give a script_id or an action")),
+    match (b.script_id, b.action, b.command) {
+        (Some(id), None, None) => put("source", format!("script:{id}")),
+        (None, Some(a), None) => put("source", format!("action:{a}")),
+        (None, None, Some(c)) => {
+            put("source", "inline".into());
+            put("body", c);
+            put("shell", b.shell.unwrap_or_default());
+            if let Some(t) = b.timeout_s {
+                put("timeout_s", t.to_string());
+            }
+        }
+        _ => return Err(bad("give one of script_id, action or command")),
     }
     if b.all {
         put("target", "all".into());

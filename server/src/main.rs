@@ -1,6 +1,6 @@
 //! deskhand server: agents enroll with a token and dial in over WebSocket, users sign in to
 //! the dashboard, and `/d/{id}/` proxies the browser to that device's voxl through the
-//! agent's tunnel.
+//! agent's tunnel. `/mcp` serves MCP clients signed in through OAuth ([`mcp`]).
 //!
 //! Settings come from the environment:
 //! - `DESKHAND_ADDR` (default `0.0.0.0:8080`)
@@ -17,11 +17,13 @@
 mod api;
 mod auth;
 mod db;
+mod db_oauth;
 mod db_pages;
 mod downloads;
 mod inventory;
 mod jobs;
 mod jobs_ui;
+mod mcp;
 mod proxy;
 mod shell;
 mod sso;
@@ -222,7 +224,10 @@ async fn main() {
         // Everything else is the web app: its files, else its index.html for its routes.
         .fallback(get(web::spa))
         .layer(axum::middleware::from_fn(auth::check_origin))
-        .with_state(app.clone());
+        .with_state(app.clone())
+        // MCP and the OAuth endpoints its clients sign in through: bearer tokens, no
+        // cookies, so outside the Origin check and open to browser-based clients.
+        .merge(mcp::routes(app.clone()));
     let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind");
     log::info!("deskhand server on http://{addr}");
     {

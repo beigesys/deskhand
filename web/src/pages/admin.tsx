@@ -108,7 +108,7 @@ export function GroupsPage() {
 
 // --- enrollment ---
 
-function CopyBlock({ label, text }: { label: string; text: string }) {
+export function CopyBlock({ label, text }: { label: string; text: string }) {
 	const [done, setDone] = React.useState(false);
 	return (
 		<div className="grid gap-1">

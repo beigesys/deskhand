@@ -255,6 +255,10 @@ pub async fn delete_script(State(app): State<Shared>, headers: HeaderMap, Path(i
 // --- making a job ---
 
 /// Built-in actions as the job form names them.
+/// The longest one-off command (`source=inline`), and its timeout unless one is given.
+const INLINE_MAX: usize = 64 * 1024;
+const INLINE_TIMEOUT: i64 = 300;
+
 const ACTIONS: [(&str, &str); 5] = [
     ("reboot", "Reboot"),
     ("shutdown", "Shut down"),
@@ -381,6 +385,17 @@ pub(crate) fn create_job_from(app: &Shared, user: &User, f: &[(String, String)])
         };
         let name = s.name.clone();
         (Task::Script { script_id: Some(s.id), shell: s.shell, body: s.body }, s.timeout_s, name)
+    } else if source == "inline" {
+        // A one-off command that isn't a saved script.
+        let Some(shell) = ScriptShell::parse(get(f, "shell")) else {
+            return Err(bad_request("pick a shell: powershell, cmd, bash or sh"));
+        };
+        let body = get(f, "body");
+        if body.trim().is_empty() || body.len() > INLINE_MAX {
+            return Err(bad_request(format!("a command needs 1 to {INLINE_MAX} bytes")));
+        }
+        let timeout_s = get(f, "timeout_s").parse().unwrap_or(INLINE_TIMEOUT).clamp(5, 86400);
+        (Task::Script { script_id: None, shell, body: body.to_owned() }, timeout_s, format!("{} command", shell.as_str()))
     } else {
         let delay_s: u32 = get(&f, "delay_s").parse().unwrap_or(0).min(86400);
         let message = Some(get(&f, "message").chars().take(512).collect::<String>()).filter(|m| !m.is_empty());
