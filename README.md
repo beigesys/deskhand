@@ -183,6 +183,30 @@ chromium`, or `PW_CHROMIUM=/path/to/chrome`); `DESKHAND_SHOTS=DIR` saves screens
   you to type the hostname to confirm.
 - `DESKHAND_AGENT_DRY_RUN_POWER=1` on an agent logs power actions instead of doing them.
 
+## MCP: Claude, ChatGPT and editors
+
+`POST /mcp` on your server speaks MCP (Streamable HTTP, no sessions). The **MCP** page
+shows the exact address and the commands to paste.
+
+- **Claude Code**: `claude mcp add --transport http deskhand https://your-server/mcp`,
+  then `/mcp` to sign in.
+- **Claude** (Settings → Connectors → Add custom connector), **ChatGPT**, VS Code,
+  Cursor: give them the same URL.
+
+The client registers itself (OAuth 2.1 dynamic registration), opens your server's
+sign-in in the browser (password or SSO), and asks you to allow it, with or without
+acting (`deskhand:act`). PKCE is required; access tokens last a day and refresh tokens
+30 days, rotated on use. For clients that take a header instead, make an API token on
+the MCP page and send `Authorization: Bearer dhp_…`.
+
+A connection acts as its person with their role as it is now: a viewer, or a token
+without `deskhand:act`, can only read. Tools: `list_devices`, `get_device`,
+`refresh_inventory`, `list_groups`, `list_scripts`, `get_script`, `list_jobs`,
+`get_job`, `run_command`, `run_script`, `power_action` and `whoami`. Each one calls the
+JSON API as that person, so roles, confirmations (reboot and shutdown need the hostname
+or device count) and the audit log are the same as in the web app. Revoke connections
+on the MCP page.
+
 ## How it fits together
 
 - `apps/server/`: dashboard, sign-in, and a relay. `/d/{id}/` proxies the browser to that

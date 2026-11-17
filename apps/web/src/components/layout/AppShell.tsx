@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Link, Outlet, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import {
+	Bot,
 	FileCode2,
 	FolderTree,
 	Gauge,
@@ -31,6 +32,7 @@ const nav: { to: string; label: string; icon: React.ElementType; min: Role; exac
 	{ to: '/devices', label: 'Devices', icon: Monitor, min: 'viewer', count: 'devices' },
 	{ to: '/jobs', label: 'Jobs', icon: PlayCircle, min: 'viewer', count: 'jobs' },
 	{ to: '/scripts', label: 'Scripts', icon: FileCode2, min: 'viewer' },
+	{ to: '/mcp-clients', label: 'MCP', icon: Bot, min: 'viewer' },
 	{ to: '/groups', label: 'Groups', icon: FolderTree, min: 'admin' },
 	{ to: '/enroll', label: 'Enrollment', icon: Ticket, min: 'admin' },
 	{ to: '/users', label: 'Users', icon: Users, min: 'admin' },
@@ -76,13 +78,13 @@ function Rail({ onNavigate }: { onNavigate?: () => void }) {
 			<Logo className="px-2 pb-4 text-rail-strong" />
 			{nav
 				.filter((n) => can[n.min])
-				.map((n, i) => {
+				.map((n, i, shown) => {
 					const active = n.exact ? path === n.to : path === n.to || path.startsWith(`${n.to}/`);
 					const count = n.count && counts[n.count];
 					return (
 						<React.Fragment key={n.to}>
 							{i === 0 && <div className="px-2 pb-1.5 pt-1 text-[10.5px] uppercase tracking-[1.2px] text-rail-dim">Fleet</div>}
-							{i === 4 && <div className="px-2 pb-1.5 pt-3.5 text-[10.5px] uppercase tracking-[1.2px] text-rail-dim">Admin</div>}
+							{n.min === 'admin' && shown[i - 1]?.min !== 'admin' && <div className="px-2 pb-1.5 pt-3.5 text-[10.5px] uppercase tracking-[1.2px] text-rail-dim">Admin</div>}
 							<Link
 								to={n.to}
 								onClick={onNavigate}

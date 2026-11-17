@@ -9,10 +9,26 @@ import { ScriptsPage } from '@/pages/scripts-list';
 import { GroupsPage, EnrollPage, UsersPage, AuditPage } from '@/pages/admin';
 import { StylePage } from '@/pages/style';
 import { AccountPage } from '@/pages/account';
+import { ConnectPage, McpPage } from '@/pages/mcp';
+import { takeNext } from '@/lib/utils';
+import * as React from 'react';
 
 const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
 
-const root = createRootRoute({ component: Outlet });
+/** After SSO, which always lands on `/`: on to the page the sign-in started from. */
+function Root() {
+	React.useEffect(() => {
+		if (window.location.pathname !== '/') return;
+		const next = takeNext();
+		if (next) window.location.replace(next);
+	}, []);
+	return <Outlet />;
+}
+
+const root = createRootRoute({ component: Root });
+
+/** Where an MCP client sends the browser to be allowed (from `/oauth/authorize`). */
+const connect = createRoute({ getParentRoute: () => root, path: '/connect', component: ConnectPage });
 
 const login = createRoute({
 	getParentRoute: () => root,
@@ -66,13 +82,15 @@ const groups = createRoute({ getParentRoute: () => app, path: '/groups', compone
 const enroll = createRoute({ getParentRoute: () => app, path: '/enroll', component: EnrollPage });
 const users = createRoute({ getParentRoute: () => app, path: '/users', component: UsersPage });
 const audit = createRoute({ getParentRoute: () => app, path: '/audit', component: AuditPage });
+const mcp = createRoute({ getParentRoute: () => app, path: '/mcp-clients', component: McpPage });
 const style = createRoute({ getParentRoute: () => app, path: '/style', component: StylePage });
 const account = createRoute({ getParentRoute: () => app, path: '/account', component: AccountPage });
 
 const tree = root.addChildren([
 	login,
 	setup,
-	app.addChildren([dashboard, devices, device, jobs, job, scripts, script, groups, enroll, users, audit, style, account]),
+	connect,
+	app.addChildren([dashboard, devices, device, jobs, job, scripts, script, groups, enroll, users, audit, mcp, style, account]),
 ]);
 
 export const router = createRouter({ routeTree: tree, defaultPreload: 'intent' });

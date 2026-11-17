@@ -53,6 +53,10 @@ pub(crate) fn cookie_value(headers: &HeaderMap) -> Option<String> {
 
 /// The signed-in user, if any.
 pub fn user(app: &App, headers: &HeaderMap) -> Option<User> {
+    // An MCP tool calling the API on its user's behalf.
+    if let Some(u) = crate::mcp::internal_user(app, headers) {
+        return Some(u);
+    }
     let token = cookie_value(headers)?;
     let now = now();
     app.db.session_user(&token, now, now + SESSION_SECS).ok().flatten()

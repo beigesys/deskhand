@@ -8,8 +8,9 @@ import { CodeField, QrSetup, RecoveryCodes } from '@/components/mfa';
 import { Button } from '@/components/ui/button';
 import { Field, Input } from '@/components/ui/form';
 import { Logo } from '@/components/layout/AppShell';
+import { rememberNext } from '@/lib/utils';
 
-function AuthFrame({ title, children }: { title: string; children: React.ReactNode }) {
+export function AuthFrame({ title, children }: { title: string; children: React.ReactNode }) {
 	return (
 		<div className="grid min-h-dvh md:grid-cols-[minmax(280px,420px)_1fr]">
 			<div className="hidden flex-col justify-between border-r border-rail-border bg-rail p-8 text-rail-fg md:flex">
@@ -34,7 +35,7 @@ function AuthFrame({ title, children }: { title: string; children: React.ReactNo
 	);
 }
 
-function ErrorLine({ msg }: { msg: string | null }) {
+export function ErrorLine({ msg }: { msg: string | null }) {
 	if (!msg) return null;
 	return (
 		<div role="alert" className="mb-3 rounded border border-bad/40 bg-bad/10 px-3 py-2 text-[13px] text-bad">
@@ -132,7 +133,10 @@ export function LoginPage() {
 
 	function done(me: Me) {
 		qc.setQueryData(keys.me, me);
-		navigate({ to: next && /^\/(?!\/|login|setup)/.test(next) ? next : '/' });
+		const to = next && /^\/(?!\/|login|setup)/.test(next) ? next : '/';
+		// A query string (the MCP consent page's request) is a full page load away.
+		if (to.includes('?')) window.location.assign(to);
+		else navigate({ to });
 	}
 
 	async function submit(e: React.FormEvent<HTMLFormElement>) {
@@ -168,7 +172,9 @@ export function LoginPage() {
 				<div className="grid gap-2">
 					{providers.map((p) => (
 						<Button key={p.id} asChild variant="secondary" size="lg" className="justify-start">
-							<a href={`/auth/${p.id}/start`}>Sign in with {p.label}</a>
+							<a href={`/auth/${p.id}/start`} onClick={() => rememberNext(next)}>
+								Sign in with {p.label}
+							</a>
 						</Button>
 					))}
 				</div>
