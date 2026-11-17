@@ -8,6 +8,14 @@ use rust_embed::RustEmbed;
 #[folder = "../web/dist"]
 struct Dist;
 
+/// Deskhand's icon, also served in place of voxl's on the desktop page (`/d/{id}/favicon.ico`).
+pub fn favicon() -> Response {
+    match Dist::get("favicon.svg") {
+        Some(f) => ([(header::CONTENT_TYPE, "image/svg+xml"), (header::CACHE_CONTROL, "public, max-age=86400")], f.data).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 /// `GET` anything else: a file from the build, or `index.html` for the app's own routes.
 pub async fn spa(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');

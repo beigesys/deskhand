@@ -31,6 +31,9 @@ pub async fn device(State(app): State<Shared>, mut req: Request) -> Response {
     else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if rest == "favicon.ico" {
+        return crate::web::favicon();
+    }
     let Some(token) = app.agents.lock().unwrap().get(&id).map(|a| a.voxl_token.clone()) else {
         return (StatusCode::NOT_FOUND, "device offline").into_response();
     };

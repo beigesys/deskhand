@@ -214,6 +214,8 @@ fn main() {
         "--addr=127.0.0.1".to_owned(),
         format!("--port={voxl_port}"),
         format!("--basic-auth-password={}", cfg.voxl_token),
+        // The browser tab's name; a --title after `--` wins.
+        format!("--title={} · Deskhand", hostname()),
     ];
     voxl.extend(voxl_args);
     log::info!("agent {} v{} -> {}", cfg.device_id, env!("CARGO_PKG_VERSION"), cfg.server);
