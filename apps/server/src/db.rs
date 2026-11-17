@@ -153,6 +153,10 @@ CREATE INDEX job_runs_job_id ON job_runs(job_id, id);
 "#, r#"
 -- The agent version each device last connected with ('' if unknown).
 ALTER TABLE devices ADD COLUMN agent_version TEXT NOT NULL DEFAULT '';
+"#, r#"
+-- Self-update: '' (none), 'updating' or 'failed', and the version / error it's about.
+ALTER TABLE devices ADD COLUMN agent_update TEXT NOT NULL DEFAULT '';
+ALTER TABLE devices ADD COLUMN agent_update_detail TEXT NOT NULL DEFAULT '';
 "#];
 
 /// The first private IPv4 address on a real interface (not loopback, Docker or a bridge).
@@ -206,6 +210,10 @@ pub struct DeviceRow {
     pub attention: String,
     /// The agent version it last connected with; empty if unknown.
     pub agent_version: String,
+    /// Self-update state: '', `updating` or `failed`.
+    pub agent_update: String,
+    /// The target version while updating, the error once failed.
+    pub agent_update_detail: String,
 }
 
 /// What a device list asks for.
@@ -592,7 +600,7 @@ impl Db {
         let mut s = c.prepare(&format!(
             "SELECT d.id, d.name, d.hostname, d.os, d.group_id, g.name, d.last_seen, d.inv_os, d.inv_os_version,
                     d.inv_last_boot, d.inv_ip, d.inv_public_ip, d.inv_serial, d.inv_model, d.inv_users, d.attention,
-                    d.agent_version
+                    d.agent_version, d.agent_update, d.agent_update_detail
              FROM devices d LEFT JOIN groups g ON g.id = d.group_id
              WHERE {filter}
                AND (?10 IS NULL OR d.name > ?10 COLLATE NOCASE OR (d.name = ?10 COLLATE NOCASE AND d.id > ?11))
@@ -619,6 +627,8 @@ impl Db {
                     users: r.get(14)?,
                     attention: r.get(15)?,
                     agent_version: r.get(16)?,
+                    agent_update: r.get(17)?,
+                    agent_update_detail: r.get(18)?,
                 })
             },
         )?;
@@ -745,6 +755,14 @@ impl Db {
 
     pub fn set_agent_version(&self, id: &str, version: &str) -> R<()> {
         self.c().execute("UPDATE devices SET agent_version = ?2 WHERE id = ?1", params![id, version])?;
+        Ok(())
+    }
+
+    pub fn set_agent_update(&self, id: &str, state: &str, detail: &str) -> R<()> {
+        self.c().execute(
+            "UPDATE devices SET agent_update = ?2, agent_update_detail = ?3 WHERE id = ?1",
+            params![id, state, detail],
+        )?;
         Ok(())
     }
 

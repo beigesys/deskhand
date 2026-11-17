@@ -85,9 +85,26 @@ export function AttentionFlag({ d }: { d: Pick<Device, 'attention'> }) {
 	);
 }
 
-/** "outdated" next to a device whose agent version isn't the server's. */
-export function AgentOutdated({ d }: { d: Pick<Device, 'agent_outdated' | 'agent_version'> }) {
+/** "outdated" next to a device whose agent version isn't the server's, or how its
+ * self-update is going. */
+export function AgentOutdated({
+	d,
+}: {
+	d: Pick<Device, 'agent_outdated' | 'agent_version' | 'agent_update' | 'agent_update_detail'>;
+}) {
 	if (!d.agent_outdated) return null;
+	if (d.agent_update === 'updating')
+		return (
+			<span title={`Updating the agent to ${d.agent_update_detail ?? "this server's version"}`}>
+				<Badge>updating agent</Badge>
+			</span>
+		);
+	if (d.agent_update === 'failed')
+		return (
+			<span title={d.agent_update_detail ?? 'The agent update failed'}>
+				<Badge tone="bad">agent update failed</Badge>
+			</span>
+		);
 	return (
 		<span title={`Agent ${d.agent_version ?? 'unknown'} differs from this server's version`}>
 			<Badge tone="warn">outdated agent</Badge>

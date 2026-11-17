@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import {
 	ChevronDown,
+	CircleArrowUp,
 	Lock,
 	LogOut,
 	Monitor,
@@ -299,6 +300,10 @@ export function DevicePage() {
 	const [deleting, setDeleting] = React.useState(false);
 
 	const refresh = useAction(() => api.post(`/devices/${id}/refresh`), { success: 'Inventory requested' });
+	const updateAgent = useAction(() => api.post(`/devices/${id}/update-agent`), {
+		invalidate: [keys.devices, keys.device(id)],
+		success: 'Agent update started',
+	});
 	const powerAction = useAction(
 		(v: { action: string; confirm?: string }) =>
 			api.post<{ id: number }>('/jobs', { action: v.action, devices: [id], confirm: v.confirm }),
@@ -403,6 +408,11 @@ export function DevicePage() {
 								{canRun && (
 									<MenuItem onSelect={() => refresh.mutate(undefined)} disabled={!d.online}>
 										<RefreshCw /> Refresh inventory
+									</MenuItem>
+								)}
+								{canRun && d.agent_outdated && (
+									<MenuItem onSelect={() => updateAgent.mutate(undefined)} disabled={!d.online || d.agent_update === 'updating'}>
+										<CircleArrowUp /> Update agent
 									</MenuItem>
 								)}
 								{isAdmin && (

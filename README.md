@@ -91,6 +91,16 @@ Fill it either way:
 
 The Enrollment page lists which builds are ready and warns about missing ones.
 
+**Agents update themselves.** When an agent connects on a different version than the
+server, the server tells it to fetch the matching build from the server's own `/dl/`,
+check its SHA-256 and restart into it (Linux keeps the same process; Windows swaps the
+`.exe` and relaunches). Upgrading the server therefore upgrades every agent within a
+minute of it reconnecting. Operators can also start it from a device's menu or for a
+selection on the Devices page. After 3 tries in an hour that don't take, or an update that
+comes back on the wrong version, the server stops and marks the device "agent update
+failed"; every step is in the audit log (`device.agent_update.*`). Turn the automatic part
+off with `DESKHAND_AGENT_AUTO_UPDATE=0`.
+
 ### 4. Enroll a machine
 
 1. In the dashboard, open **Enrollment** and click **New token**; pick a group.
@@ -198,6 +208,7 @@ chromium`, or `PW_CHROMIUM=/path/to/chrome`); `DESKHAND_SHOTS=DIR` saves screens
 | `DESKHAND_AGENT_DIR` | `agents/` beside the DB | Agent builds served at `/dl/...` |
 | `DESKHAND_AGENT_SOURCE` | `github` | `local` never fetches missing agent builds |
 | `DESKHAND_AGENT_REPO` | `beigesys/deskhand` | GitHub repo whose `v{server version}` release supplies missing agent builds |
+| `DESKHAND_AGENT_AUTO_UPDATE` | `1` | `0` stops updating agents to the server's version when they connect (manual updates still work) |
 | `DESKHAND_LOGIN_RATE` | `5` | Sign-in attempts allowed per IP per minute |
 | `DESKHAND_ENTRA_*`, `DESKHAND_GOOGLE_*`, `DESKHAND_GITHUB_*` | unset | Single sign-on with Microsoft Entra ID, Google, GitHub: see [docs/sso.md](docs/sso.md) |
 | `DESKHAND_SSO_AUTO_PROVISION` | off | `viewer` or `operator`: create users on first SSO sign-in (restricted providers only) |

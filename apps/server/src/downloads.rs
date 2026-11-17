@@ -276,7 +276,10 @@ pub async fn download(
     headers: HeaderMap,
     Path(name): Path<String>,
 ) -> Response {
-    if !app.download_limit.allow(client_ip(&app, &headers, peer)) {
+    // Enrolled agents fetching their update aren't limited: after a server upgrade a whole
+    // office behind one address updates at once.
+    let agent = crate::agent_device(&app, &headers).is_some();
+    if !agent && !app.download_limit.allow(client_ip(&app, &headers, peer)) {
         return (StatusCode::TOO_MANY_REQUESTS, "too many downloads; wait a minute").into_response();
     }
     if let Some(&(_, file)) = PLATFORMS.iter().find(|(_, f)| *f == name) {

@@ -10,6 +10,7 @@
 mod inventory;
 mod jobs;
 mod shell;
+mod update;
 
 use futures_util::{SinkExt, StreamExt};
 use deskhand_proto::{AgentMsg, EnrollRequest, EnrollResponse, ServerMsg, StreamKind};
@@ -215,7 +216,8 @@ fn main() {
         format!("--basic-auth-password={}", cfg.voxl_token),
     ];
     voxl.extend(voxl_args);
-    log::info!("agent {} -> {}", cfg.device_id, cfg.server);
+    log::info!("agent {} v{} -> {}", cfg.device_id, env!("CARGO_PKG_VERSION"), cfg.server);
+    std::thread::spawn(update::cleanup);
 
     std::thread::spawn(move || {
         tokio::runtime::Builder::new_current_thread()
@@ -250,11 +252,13 @@ struct Outbox {
 async fn tunnel(cfg: Config) {
     let cfg = std::sync::Arc::new(cfg);
     let (out_tx, out_rx) = tokio::sync::mpsc::unbounded_channel();
-    let runner = jobs::Runner::new(out_tx);
+    let runner = jobs::Runner::new(out_tx.clone());
     let mut outbox = Outbox { rx: out_rx, retry: None };
+    let updating = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut backoff = Duration::from_secs(1);
     loop {
-        match control(&cfg, &runner, &mut outbox).await {
+        let link = Link { runner: &runner, out: &out_tx, updating: &updating };
+        match control(&cfg, link, &mut outbox).await {
             Ok(()) => {
                 log::warn!("server closed the connection");
                 backoff = Duration::from_secs(1);
@@ -266,7 +270,17 @@ async fn tunnel(cfg: Config) {
     }
 }
 
-async fn control(cfg: &std::sync::Arc<Config>, runner: &jobs::Runner, outbox: &mut Outbox) -> Result<(), String> {
+/// What a control connection hands work to.
+struct Link<'a> {
+    runner: &'a jobs::Runner,
+    /// For messages that should reach the server even across a reconnect.
+    out: &'a tokio::sync::mpsc::UnboundedSender<AgentMsg>,
+    /// Set while an update downloads, so a second `Update` doesn't start another.
+    updating: &'a std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+async fn control(cfg: &std::sync::Arc<Config>, link: Link<'_>, outbox: &mut Outbox) -> Result<(), String> {
+    let runner = link.runner;
     let (ws, _) = tokio_tungstenite::connect_async(request(cfg, "/agent/connect"))
         .await
         .map_err(|e| e.to_string())?;
@@ -277,6 +291,7 @@ async fn control(cfg: &std::sync::Arc<Config>, runner: &jobs::Runner, outbox: &m
         os: std::env::consts::OS.into(),
         voxl_token: cfg.voxl_token.clone(),
         version: env!("CARGO_PKG_VERSION").into(),
+        platform: deskhand_proto::platform(),
     };
     tx.send(Message::Text(serde_json::to_string(&hello).unwrap().into()))
         .await
@@ -323,6 +338,24 @@ async fn control(cfg: &std::sync::Arc<Config>, runner: &jobs::Runner, outbox: &m
                 Ok(ServerMsg::RunAction { run_id, action }) => {
                     log::info!("job run {run_id}: {}", action.name());
                     runner.run_action(run_id, action);
+                }
+                Ok(ServerMsg::Update { version, url, sha256 }) => {
+                    use std::sync::atomic::Ordering;
+                    if link.updating.swap(true, Ordering::SeqCst) {
+                        log::info!("update to {version} asked while one is running; ignoring");
+                        continue;
+                    }
+                    log::info!("updating to {version} from {url}");
+                    let (server, auth) = (http_base(&cfg.server), format!("Bearer {}:{}", cfg.device_id, cfg.secret));
+                    let (out, updating) = (link.out.clone(), link.updating.clone());
+                    tokio::spawn(async move {
+                        let error = tokio::task::spawn_blocking(move || update::apply(&server, &auth, &url, &sha256))
+                            .await
+                            .unwrap_or_else(|e| e.to_string());
+                        log::warn!("update to {version} failed: {error}");
+                        updating.store(false, Ordering::SeqCst);
+                        let _ = out.send(AgentMsg::UpdateFailed { version, error });
+                    });
                 }
                 Ok(ServerMsg::Open { sid, kind }) => {
                     let cfg = cfg.clone();
