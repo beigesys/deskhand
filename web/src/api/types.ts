@@ -52,6 +52,10 @@ export interface Device {
 	agent_version: string | null;
 	/** The agent's version differs from the server's. */
 	agent_outdated: boolean;
+	/** Self-update in progress or failed (null when neither). */
+	agent_update: 'updating' | 'failed' | null;
+	/** The version it's updating to, or why the update failed. */
+	agent_update_detail: string | null;
 }
 
 export interface Inventory {

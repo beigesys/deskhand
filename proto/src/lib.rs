@@ -21,7 +21,15 @@ pub enum AgentMsg {
         /// The agent's version (`CARGO_PKG_VERSION`); empty from agents older than this field.
         #[serde(default)]
         version: String,
+        /// Which agent build this is, as in its download name `deskhand-agent-{platform}`
+        /// (`linux-x86_64`, `windows-x86_64.exe`, ...). Agents that can update themselves
+        /// send it; it's empty from older ones.
+        #[serde(default)]
+        platform: String,
     },
+    /// An [`ServerMsg::Update`] didn't take: the download, the check or the swap failed.
+    /// (Success shows as the agent reconnecting with the new version.)
+    UpdateFailed { version: String, error: String },
     /// What the device is: sent after Hello, every few hours, and when asked.
     Inventory { inventory: Box<Inventory> },
     /// Output from a running job, as it comes. `data` is UTF-8 (invalid bytes replaced).
@@ -138,6 +146,16 @@ pub enum ServerMsg {
     RunJob { run_id: i64, shell: ScriptShell, body: String, timeout_s: u64 },
     /// Carry out a built-in action; answered with one `JobResult`.
     RunAction { run_id: i64, action: Action },
+    /// Replace the agent with this build and restart into it. `url` is a path on the
+    /// server the agent is connected to (`/dl/deskhand-agent-{platform}`); `sha256` is the
+    /// file's hex digest, which the download must match.
+    Update { version: String, url: String, sha256: String },
+}
+
+/// This build's platform, as in `AgentMsg::Hello.platform`.
+pub fn platform() -> String {
+    let exe = if cfg!(windows) { ".exe" } else { "" };
+    format!("{}-{}{exe}", std::env::consts::OS, std::env::consts::ARCH)
 }
 
 /// What a stream connects to on the agent.

@@ -37,6 +37,8 @@ pub fn router() -> Router<Shared> {
         .route("/devices/{id}/rename", post(rename_device))
         .route("/devices/{id}/move", post(move_device))
         .route("/devices/{id}/refresh", post(refresh_device))
+        .route("/devices/{id}/update-agent", post(update_agent))
+        .route("/devices/update-agent", post(update_agents))
         .route("/groups", get(groups).post(add_group))
         .route("/groups/{id}", delete(delete_group))
         .route("/enroll-tokens", get(enroll_tokens).post(add_enroll_token))
@@ -319,6 +321,10 @@ pub struct DeviceOut {
     agent_version: Option<String>,
     /// The agent's version differs from the server's.
     agent_outdated: bool,
+    /// Self-update: `updating` or `failed` (null when neither).
+    agent_update: Option<String>,
+    /// The version it's updating to, or why the update failed.
+    agent_update_detail: Option<String>,
 }
 
 fn attention(flags: &str, online: bool, last_seen: i64, now: i64) -> Vec<&'static str> {
@@ -359,6 +365,8 @@ fn device_out(d: crate::db::DeviceRow, since: Option<i64>, now: i64) -> DeviceOu
         last_boot: d.inv_last_boot,
         agent_outdated: !d.agent_version.is_empty() && d.agent_version != env!("CARGO_PKG_VERSION"),
         agent_version: Some(d.agent_version).filter(|v| !v.is_empty()),
+        agent_update: Some(d.agent_update).filter(|v| !v.is_empty()),
+        agent_update_detail: Some(d.agent_update_detail).filter(|v| !v.is_empty()),
     }
 }
 
@@ -563,6 +571,38 @@ async fn refresh_device(State(app): State<Shared>, headers: HeaderMap, Path(id):
     }
     app.db.audit(now(), Some(user.id), Some(&id), "device.inventory_refresh", "");
     Ok(ok())
+}
+
+/// `POST /api/v1/devices/{id}/update-agent`: update the agent to this server's version now.
+async fn update_agent(State(app): State<Shared>, headers: HeaderMap, Path(id): Path<String>) -> Api<serde_json::Value> {
+    let user = need(&app, &headers, Role::Operator)?;
+    crate::updates::start(&app, &id, Some(user.id), false).map_err(|e| err(StatusCode::CONFLICT, e))?;
+    Ok(ok())
+}
+
+#[derive(Deserialize)]
+struct IdsBody {
+    ids: Vec<String>,
+}
+
+/// `POST /api/v1/devices/update-agent {ids}`: the same for many devices. Answers which
+/// started and, for the rest, why not.
+async fn update_agents(State(app): State<Shared>, headers: HeaderMap, Json(b): Json<IdsBody>) -> Api<serde_json::Value> {
+    let user = need(&app, &headers, Role::Operator)?;
+    if b.ids.len() > 10_000 {
+        return Err(bad("too many devices"));
+    }
+    let mut started = vec![];
+    let mut skipped = serde_json::Map::new();
+    for id in b.ids {
+        match crate::updates::start(&app, &id, Some(user.id), false) {
+            Ok(()) => started.push(id),
+            Err(e) => {
+                skipped.insert(id, e.into());
+            }
+        }
+    }
+    Ok(Json(json!({ "started": started, "skipped": skipped })))
 }
 
 /// `GET /api/v1/events`: device changes as server-sent events, for live lists.

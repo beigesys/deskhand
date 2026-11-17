@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Link, useNavigate, useSearch } from '@tanstack/react-router';
-import { CheckSquare, Download, FolderInput, Play, Plus, Power, Search, X } from 'lucide-react';
+import { CheckSquare, CircleArrowUp, Download, FolderInput, Play, Plus, Power, Search, X } from 'lucide-react';
 import { api } from '@/api/client';
 import { keys, useAction, useCan, useDevices } from '@/api/hooks';
 import type { Device, Group } from '@/api/types';
@@ -193,6 +193,17 @@ export function DevicesPage() {
 			},
 		},
 	);
+	const updateAgents = useAction(
+		(ds: Device[]) =>
+			api.post<{ started: string[]; skipped: Record<string, string> }>('/devices/update-agent', { ids: ds.map((d) => d.id) }),
+		{
+			invalidate: [keys.devices],
+			success: (r) => {
+				const skipped = Object.keys(r.skipped).length;
+				return `Agent update started on ${r.started.length} device${r.started.length === 1 ? '' : 's'}${skipped ? `; ${skipped} skipped (offline or current)` : ''}`;
+			},
+		},
+	);
 	const wake = useAction((d: Device) => api.post('/jobs', { action: 'wake', devices: [d.id] }), {
 		invalidate: [keys.jobs],
 		success: (_, d) => `Wake sent to ${d.name}`,
@@ -209,6 +220,11 @@ export function DevicesPage() {
 					<Button size="sm" variant="danger" onClick={() => setRun({ source: 'action:reboot' })}>
 						<Power /> Reboot
 					</Button>
+					{chosen.some((d) => d.agent_outdated) && (
+						<Button size="sm" onClick={() => updateAgents.mutate(chosen.filter((d) => d.agent_outdated))} disabled={updateAgents.isPending}>
+							<CircleArrowUp /> Update agents
+						</Button>
+					)}
 				</>
 			)}
 			{isAdmin && (

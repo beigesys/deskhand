@@ -13,6 +13,8 @@
 //!   at `/dl/...` for the install scripts (`/install.sh`, `/install.ps1`)
 //! - `DESKHAND_PUBLIC_URL`, `DESKHAND_ENTRA_*`, `DESKHAND_GOOGLE_*`, `DESKHAND_GITHUB_*`,
 //!   `DESKHAND_SSO_AUTO_PROVISION`, `DESKHAND_PASSWORD_LOGIN`: single sign-on (docs/sso.md)
+//! - `DESKHAND_AGENT_AUTO_UPDATE=0`: don't update agents to this server's version on
+//!   their own (see [`updates`])
 
 mod api;
 mod auth;
@@ -26,6 +28,7 @@ mod proxy;
 mod shell;
 mod sso;
 mod ui;
+mod updates;
 mod web;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -50,6 +53,9 @@ pub use ui::esc;
 pub struct Agent {
     pub voxl_token: String,
     pub since: i64,
+    /// What it said in its Hello.
+    pub version: String,
+    pub platform: String,
     /// Which connection this is, so a stale one going away doesn't remove its replacement.
     conn: u64,
     tx: mpsc::UnboundedSender<ServerMsg>,
@@ -67,6 +73,7 @@ pub struct App {
     pub public_url: Option<String>,
     /// Agent builds for `/dl`: the agents directory, filled from the matching release.
     pub builds: downloads::Agents,
+    pub updates: updates::Updates,
     pub sso: sso::Sso,
     /// DESKHAND_PASSWORD_LOGIN, which only takes effect with an SSO provider set up
     /// (see [`auth::password_login`]).
@@ -162,6 +169,7 @@ async fn main() {
         download_limit: auth::RateLimit::with_max(downloads::DOWNLOADS_PER_MINUTE),
         public_url: std::env::var("DESKHAND_PUBLIC_URL").ok().filter(|v| !v.is_empty()),
         builds: downloads::Agents::from_env(&db_path),
+        updates: updates::Updates::from_env(),
         sso: sso::Sso::from_env(),
         password_login: std::env::var("DESKHAND_PASSWORD_LOGIN").map_or(true, |v| v != "0"),
         agents: Mutex::default(),
@@ -269,7 +277,7 @@ async fn enroll(State(app): State<Shared>, Json(req): Json<EnrollRequest>) -> Re
 // --- agents ---
 
 /// The device an agent's `Authorization: Bearer {device_id}:{secret}` proves it is.
-fn agent_device(app: &App, headers: &HeaderMap) -> Option<String> {
+pub fn agent_device(app: &App, headers: &HeaderMap) -> Option<String> {
     let (id, secret) = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -300,7 +308,7 @@ async fn control(app: Shared, id: String, ip: String, ws: WebSocket) {
     let Ok(Some(Ok(Message::Text(t)))) = hello else {
         return;
     };
-    let Ok(AgentMsg::Hello { hostname, os, voxl_token, version, .. }) = serde_json::from_str(&t) else {
+    let Ok(AgentMsg::Hello { hostname, os, voxl_token, version, platform, .. }) = serde_json::from_str(&t) else {
         log::warn!("agent {id} sent a bad hello");
         return;
     };
@@ -312,10 +320,11 @@ async fn control(app: Shared, id: String, ip: String, ws: WebSocket) {
     app.agents
         .lock()
         .unwrap()
-        .insert(id.clone(), Agent { voxl_token, since: now(), conn, tx });
+        .insert(id.clone(), Agent { voxl_token, since: now(), version: version.clone(), platform: platform.clone(), conn, tx });
     let _ = app.device_events.send(DeviceEvent::Online { id: id.clone(), since: now() });
     // Runs that waited for this device to come online.
     jobs::dispatch(&app, &id);
+    updates::on_hello(&app, &id, &version, &platform);
     let mut ping = tokio::time::interval(Duration::from_secs(20));
     let mut ticks = 0u32;
     loop {
@@ -339,6 +348,7 @@ async fn control(app: Shared, id: String, ip: String, ws: WebSocket) {
                     Ok(AgentMsg::JobResult { run_id, status, exit_code, stdout, stderr }) => {
                         jobs::on_result(&app, &id, run_id, status, exit_code, stdout, stderr)
                     }
+                    Ok(AgentMsg::UpdateFailed { version, error }) => updates::on_failed(&app, &id, &version, &error),
                     Ok(AgentMsg::Hello { .. }) => {}
                     Err(e) => log::warn!("agent {id} sent something unreadable: {e}"),
                 },
