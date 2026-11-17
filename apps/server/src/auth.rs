@@ -1,6 +1,7 @@
 //! Signing in: argon2 passwords, cookie sessions in the database (7 days, sliding), roles,
 //! first-run setup, a login rate limit, and the Origin check on state-changing requests.
 
+use crate::audit::Entry;
 use crate::db::{Role, User};
 use crate::{now, random_hex, ui, App, Shared};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
@@ -181,6 +182,17 @@ fn message(status: StatusCode, title: &str, body: &str) -> Response {
         .into_response()
 }
 
+/// Audits a wrong user name or password.
+pub(crate) fn login_failed(app: &App, username: &str, user: Option<i64>) {
+    let mut e = Entry::new("login.failed")
+        .detail(format!("{username}: wrong user name or password"))
+        .data(serde_json::json!({ "username": username, "reason": "password" }));
+    if let Some(id) = user {
+        e = e.target("user", id);
+    }
+    app.db.record(e);
+}
+
 /// Starts a session for `user` and audits it: the Set-Cookie value that carries it.
 pub(crate) fn new_session(app: &App, headers: &HeaderMap, user: &User, action: &str, detail: &str) -> Option<String> {
     let token = random_hex(32);
@@ -190,7 +202,7 @@ pub(crate) fn new_session(app: &App, headers: &HeaderMap, user: &User, action: &
         return None;
     }
     let _ = app.db.purge_sessions(now);
-    app.db.audit(now, Some(user.id), None, action, detail);
+    app.db.record(Entry::new(action).at(now).by(user.id).target("user", user.id).detail(detail));
     Some(session_cookie(app, headers, &token))
 }
 
@@ -247,7 +259,7 @@ pub async fn sso_callback(
         Ok(id) => id,
         Err(e) => {
             log::warn!("{} sign-in from {ip}: {e}", kind.label());
-            app.db.audit(now(), None, None, "sso.failed", &format!("{}: {e} (from {ip})", kind.key()));
+            app.db.record(Entry::new("sso.failed").detail(format!("{}: {e}", kind.key())));
             let status = if matches!(e, SsoError::Provider(_)) { StatusCode::BAD_GATEWAY } else { StatusCode::FORBIDDEN };
             return message(status, "Sign-in failed", &format!("<p>{}</p>", ui::esc(&e.to_string())));
         }
@@ -260,10 +272,10 @@ pub async fn sso_callback(
                 Resolved::Provisioned => app.db.audit(now(), Some(user.id), None, "sso.provision", &format!("{what} as {}", user.role.as_str())),
                 Resolved::Known => {}
             }
-            start_session(&app, &headers, &user, "sso.login", &format!("{what} from {ip}"))
+            start_session(&app, &headers, &user, "sso.login", &what)
         }
         Ok(None) => {
-            app.db.audit(now(), None, None, "sso.denied", &format!("{} {} has no user (from {ip})", kind.key(), id.display));
+            app.db.record(Entry::new("sso.denied").detail(format!("{} {} has no user", kind.key(), id.display)));
             let email = match &id.verified_email {
                 Some(e) => format!("<p>Ask an admin to add a user with the email <b>{}</b>, then sign in again.</p>", ui::esc(e)),
                 None => format!(

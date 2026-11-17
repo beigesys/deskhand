@@ -22,6 +22,7 @@ import type {
 	Job,
 	JobDetail,
 	Me,
+	MfaStatus,
 	Page,
 	Role,
 	Run,
@@ -42,6 +43,8 @@ export const keys = {
 	agentDownloads: ['agent-downloads'] as const,
 	users: ['users'] as const,
 	audit: ['audit'] as const,
+	activity: (id: string) => ['activity', id] as const,
+	mfa: ['mfa'] as const,
 	scripts: ['scripts'] as const,
 	script: (id: number) => ['script', id] as const,
 	jobs: ['jobs'] as const,
@@ -118,6 +121,9 @@ export const useDeviceRuns = (id: string) =>
 export const useRuns =(id: number, f: { status?: string; q?: string }) => usePaged<Run>(keys.runs(id), `/jobs/${id}/runs`, f);
 export const useAudit = (f: { action?: string; q?: string; user?: string; device?: string }) =>
 	usePaged<AuditRow>(keys.audit, '/audit', f, { limit: 100 });
+export const useDeviceActivity = (id: string, f: { action?: string; q?: string }) =>
+	usePaged<AuditRow>(keys.activity(id), `/devices/${id}/activity`, f, { limit: 50 });
+export const useMfa = () => useQuery({ queryKey: keys.mfa, queryFn: () => api.get<MfaStatus>('/me/mfa') });
 
 /** Whether SSO is on, from the users list (admins only). */
 /** Which agent builds the server can hand out (admin only). Polls while any is being fetched. */

@@ -18,7 +18,10 @@ import {
 	FolderInput,
 } from 'lucide-react';
 import { api } from '@/api/client';
-import { keys, useAction, useCan, useDevice, useDeviceRuns } from '@/api/hooks';
+import { keys, useAction, useCan, useDevice, useDeviceActivity, useDeviceRuns } from '@/api/hooks';
+import { AuditTable } from '@/components/audit';
+import { LoadMore } from '@/components/ui/load-more';
+import { useDebounce } from '@/components/ui/search';
 import type { Device, Group, Inventory, JobKind } from '@/api/types';
 import { AsyncCombobox, groupOption, NO_GROUP } from '@/components/ui/async-combobox';
 import { AgentOutdated, AttentionBadges, barColor } from '@/components/devices';
@@ -27,7 +30,6 @@ import { Button } from '@/components/ui/button';
 import { Confirm } from '@/components/ui/confirm';
 import { Badge, Chip, Empty, KV, Meter, Panel, StatusBadge } from '@/components/ui/display';
 import { Field, Input } from '@/components/ui/form';
-import { LoadMore } from '@/components/ui/load-more';
 import {
 	Dialog,
 	DialogContent,
@@ -285,6 +287,48 @@ function Runs({ id }: { id: string }) {
 	);
 }
 
+const ACTIVITY_FILTERS: [string, string][] = [
+	['', 'Everything'],
+	['desktop.', 'Desktop'],
+	['shell.', 'Shell'],
+	['power.', 'Power'],
+	['job.', 'Jobs'],
+	['device.', 'Changes'],
+];
+
+/** Who did what on this device: sessions, power actions, jobs, changes. */
+function Activity({ id }: { id: string }) {
+	const [action, setAction] = React.useState('');
+	const [text, setText] = React.useState('');
+	const q = useDebounce(text, 250);
+	const a = useDeviceActivity(id, { action: action || undefined, q });
+	return (
+		<div className="grid gap-3">
+			<div className="flex flex-wrap items-center gap-2">
+				<div className="flex flex-wrap gap-1" role="group" aria-label="Show">
+					{ACTIVITY_FILTERS.map(([v, label]) => (
+						<Button key={v} size="sm" variant={action === v ? 'primary' : 'ghost'} onClick={() => setAction(v)} aria-pressed={action === v}>
+							{label}
+						</Button>
+					))}
+				</div>
+				<Input
+					value={text}
+					onChange={(e) => setText(e.target.value)}
+					type="search"
+					placeholder="Search user, detail, IP…"
+					aria-label="Search activity"
+					className="max-w-64"
+				/>
+			</div>
+			<div className="rounded border border-line bg-surface">
+				<AuditTable rows={a.items} loading={a.isLoading} showTarget={false} />
+				<LoadMore hasNextPage={!!a.hasNextPage} isFetchingNextPage={a.isFetchingNextPage} fetchNextPage={a.fetchNextPage} />
+			</div>
+		</div>
+	);
+}
+
 export function DevicePage() {
 	const { id } = useParams({ from: '/app/devices/$id' });
 	const { tab } = useSearch({ from: '/app/devices/$id' });
@@ -445,6 +489,7 @@ export function DevicePage() {
 					<TabsTrigger value="software">Software</TabsTrigger>
 					<TabsTrigger value="security">Security</TabsTrigger>
 					<TabsTrigger value="jobs">Jobs</TabsTrigger>
+					{canRun && <TabsTrigger value="activity">Activity</TabsTrigger>}
 				</TabsList>
 				<div className="pt-3">
 					<TabsContent value="overview">
@@ -468,6 +513,11 @@ export function DevicePage() {
 					<TabsContent value="jobs">
 						<Runs id={id} />
 					</TabsContent>
+					{canRun && (
+						<TabsContent value="activity">
+							<Activity id={d.id} />
+						</TabsContent>
+					)}
 				</div>
 			</Tabs>
 

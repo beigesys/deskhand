@@ -9,6 +9,7 @@
 //!   password; without it the server prints a one-time setup link
 //! - `DESKHAND_TRUST_PROXY=1`: believe X-Forwarded-Proto/-For from a TLS proxy in front
 //! - `DESKHAND_LOGIN_RATE` (default 5): sign-in attempts allowed per IP per minute
+//! - `DESKHAND_REQUIRE_MFA=1`: password users must set up two-step sign-in (TOTP)
 //! - `DESKHAND_AGENT_DIR` (default `agents/` beside the database): agent builds served
 //!   at `/dl/...` for the install scripts (`/install.sh`, `/install.ps1`)
 //! - `DESKHAND_PUBLIC_URL`, `DESKHAND_ENTRA_*`, `DESKHAND_GOOGLE_*`, `DESKHAND_GITHUB_*`,
@@ -16,7 +17,11 @@
 //! - `DESKHAND_AGENT_AUTO_UPDATE=0`: don't update agents to this server's version on
 //!   their own (see [`updates`])
 
+// Handlers return `Result<_, Response>` throughout; boxing every error buys nothing.
+#![allow(clippy::result_large_err)]
+
 mod api;
+mod audit;
 mod auth;
 mod db;
 mod db_pages;
@@ -24,6 +29,7 @@ mod downloads;
 mod inventory;
 mod jobs;
 mod jobs_ui;
+mod mfa;
 mod proxy;
 mod shell;
 mod sso;
@@ -67,6 +73,10 @@ pub struct App {
     /// Set while there are no users: the token the first admin signs up with.
     pub setup_token: Mutex<Option<String>>,
     pub login_limit: auth::RateLimit,
+    /// Second-step sign-ins in progress.
+    pub mfa: mfa::Challenges,
+    /// DESKHAND_REQUIRE_MFA: password users must set up two-step sign-in.
+    pub require_mfa: bool,
     /// Agent binary downloads per IP (`/dl`).
     pub download_limit: auth::RateLimit,
     /// DESKHAND_PUBLIC_URL: the address agents and install scripts use.
@@ -166,6 +176,8 @@ async fn main() {
         login_limit: auth::RateLimit::with_max(
             std::env::var("DESKHAND_LOGIN_RATE").ok().and_then(|v| v.parse().ok()).filter(|n| *n > 0).unwrap_or(5),
         ),
+        mfa: mfa::Challenges::default(),
+        require_mfa: std::env::var("DESKHAND_REQUIRE_MFA").is_ok_and(|v| v == "1"),
         download_limit: auth::RateLimit::with_max(downloads::DOWNLOADS_PER_MINUTE),
         public_url: std::env::var("DESKHAND_PUBLIC_URL").ok().filter(|v| !v.is_empty()),
         builds: downloads::Agents::from_env(&db_path),
@@ -200,6 +212,7 @@ async fn main() {
         // Everything else is the web app: its files, else its index.html for its routes.
         .fallback(get(web::spa))
         .layer(axum::middleware::from_fn(auth::check_origin))
+        .layer(axum::middleware::from_fn_with_state(app.clone(), audit::scope_ip))
         .with_state(app.clone());
     let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind");
     log::info!("deskhand server on http://{addr}");

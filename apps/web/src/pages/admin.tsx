@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Link } from '@tanstack/react-router';
-import { AlertTriangle, Check, Copy, Plus, Trash2, Unlink } from 'lucide-react';
+import { AlertTriangle, Check, Copy, Plus, ShieldOff, Trash2, Unlink } from 'lucide-react';
 import { api } from '@/api/client';
 import { keys, useAction, useAgentDownloads, useAudit, useCan, useGroups, useMe, useSsoEnabled, useTokens, useUsers } from '@/api/hooks';
 import type { AgentBinary, Device, Group, NewEnrollToken, Role, User } from '@/api/types';
@@ -13,7 +13,8 @@ import { Badge, Empty, PageHeader } from '@/components/ui/display';
 import { Field, Input, Select } from '@/components/ui/form';
 import { FormDialog, useNewRow } from '@/components/ui/form-dialog';
 import { Table, Td, Th, Tr } from '@/components/ui/table';
-import { ago, datetime, until } from '@/lib/utils';
+import { AuditTable } from '@/components/audit';
+import { ago, until } from '@/lib/utils';
 
 function AdminOnly({ children }: { children: React.ReactNode }) {
 	const ok = useCan('admin');
@@ -339,6 +340,12 @@ export function UsersPage() {
 	const me = useMe();
 	const [deleting, setDeleting] = React.useState<{ id: number; username: string } | null>(null);
 	const [adding, setAdding] = React.useState(false);
+	const [resetting, setResetting] = React.useState<{ id: number; username: string } | null>(null);
+	const reset = useAction((id: number) => api.post(`/users/${id}/mfa/reset`), {
+		invalidate: [keys.users],
+		success: 'Two-step sign-in reset',
+		onSuccess: () => setResetting(null),
+	});
 	const fresh = useNewRow<number>();
 	const role = useAction((v: { id: number; role: Role }) => api.post(`/users/${v.id}/role`, { role: v.role }), {
 		invalidate: [keys.users],
@@ -374,8 +381,9 @@ export function UsersPage() {
 								<Th>Role</Th>
 								<Th>Email</Th>
 								<Th>Signs in with</Th>
+								<Th>Two-step</Th>
 								<Th className="hidden md:table-cell">Added</Th>
-								<Th className="w-10" />
+								<Th className="w-20" />
 							</tr>
 						</thead>
 						<tbody>
@@ -416,8 +424,20 @@ export function UsersPage() {
 											))}
 										</span>
 									</Td>
+									<Td>{u.mfa_enabled ? <Badge tone="ok">On</Badge> : <span className="text-muted">Off</span>}</Td>
 									<Td className="hidden text-muted md:table-cell">{ago(u.created)}</Td>
-									<Td>
+									<Td className="whitespace-nowrap text-right">
+										{u.mfa_enabled && (
+											<Button
+												size="icon"
+												variant="ghost"
+												aria-label={`Reset two-step sign-in for ${u.username}`}
+												title="Reset two-step sign-in"
+												onClick={() => setResetting(u)}
+											>
+												<ShieldOff />
+											</Button>
+										)}
 										<Button
 											size="icon"
 											variant="ghost"
@@ -477,6 +497,15 @@ export function UsersPage() {
 				danger
 				onConfirm={() => deleting && del.mutate(deleting.id)}
 			/>
+			<Confirm
+				open={!!resetting}
+				onOpenChange={(v) => !v && setResetting(null)}
+				title={`Reset two-step sign-in for ${resetting?.username}?`}
+				body="Their authenticator app and recovery codes stop working. They sign in with just a password until they set it up again (or are made to, if the server requires it)."
+				action="Reset"
+				danger
+				onConfirm={() => resetting && reset.mutate(resetting.id)}
+			/>
 		</AdminOnly>
 	);
 }
@@ -498,7 +527,7 @@ export function AuditPage() {
 		<AdminOnly>
 			<PageHeader title="Audit log" sub="Who did what, newest first." />
 			<div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(200px,1fr)_200px_200px_200px_auto]">
-				<Input value={text} onChange={(e) => setText(e.target.value)} type="search" placeholder="Search user, device, detail…" aria-label="Search" />
+				<Input value={text} onChange={(e) => setText(e.target.value)} type="search" placeholder="Search user, device, detail, IP…" aria-label="Search" />
 				<AsyncCombobox<User>
 					endpoint="/users"
 					kind="audit-user"
@@ -543,38 +572,7 @@ export function AuditPage() {
 				)}
 			</div>
 			<div className="rounded border border-line bg-surface">
-				{rows.length === 0 ? (
-					<Empty>{audit.isLoading ? 'Loading…' : 'Nothing matches.'}</Empty>
-				) : (
-					<Table>
-						<thead>
-							<tr>
-								<Th>When</Th>
-								<Th>User</Th>
-								<Th>Action</Th>
-								<Th>Device</Th>
-								<Th>Detail</Th>
-							</tr>
-						</thead>
-						<tbody>
-							{rows.map((r) => (
-								<Tr key={r.id}>
-									<Td className="font-mono text-xs text-muted">{datetime(r.ts)}</Td>
-									<Td>{r.user ?? <span className="text-subtle">—</span>}</Td>
-									<Td>
-										<Badge tone={r.action.includes('failed') || r.action.includes('delete') ? 'bad' : r.action.startsWith('login') ? 'ok' : 'neutral'}>
-											{r.action}
-										</Badge>
-									</Td>
-									<Td>{r.device ?? <span className="text-subtle">—</span>}</Td>
-									<Td className="max-w-md truncate text-muted" title={r.detail}>
-										{r.detail}
-									</Td>
-								</Tr>
-							))}
-						</tbody>
-					</Table>
-				)}
+				<AuditTable rows={rows} loading={audit.isLoading} />
 				<LoadMore hasNextPage={!!audit.hasNextPage} isFetchingNextPage={audit.isFetchingNextPage} fetchNextPage={audit.fetchNextPage} />
 			</div>
 		</AdminOnly>

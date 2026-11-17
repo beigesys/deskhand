@@ -140,7 +140,7 @@ pub(crate) fn create_job_from(app: &Shared, user: &User, f: &[(String, String)])
         Err(e) => return Err(db_fail(e)),
     };
     let when = schedule.as_deref().map_or("now".to_owned(), |s| format!("cron {s}"));
-    app.db.audit(now(), Some(user.id), None, "job.create", &format!("{id}: {name} ({when})"));
+    app.db.record(crate::audit::Entry::new("job.create").by(user.id).target("job", id).detail(format!("{name} ({when})")));
     if schedule.is_none() {
         if let Err(e) = jobs::fire(app, id) {
             log::error!("firing job {id}: {e}");

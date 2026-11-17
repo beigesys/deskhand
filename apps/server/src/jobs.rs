@@ -598,7 +598,19 @@ pub fn fire(app: &App, job_id: i64) -> Result<usize, String> {
                 }
             }
         }
-        app.db.audit(now, job.created_by, Some(device), "job.run", &format!("job {} ({}): {what}", job.id, job.name));
+        // Power actions read as what they are; scripts as the job that ran them.
+        let action = match &job.task {
+            Task::Action(_) => format!("power.{what}"),
+            Task::Script { .. } => "job.run".to_owned(),
+        };
+        app.db.record(
+            crate::audit::Entry::new(action)
+                .at(now)
+                .by(job.created_by)
+                .device(device.as_str())
+                .detail(format!("{} (job {})", job.name, job.id))
+                .data(serde_json::json!({ "job_id": job.id, "job": job.name, "what": what })),
+        );
     }
     let _ = app.job_events.send(Event::NewRuns { job_id });
     for device in &devices {
