@@ -1,4 +1,4 @@
-// Shapes of /api/v1, matching server/src/api.rs (and Inventory in proto/src/lib.rs).
+// Shapes of /api/v1, matching apps/server/src/api.rs (and Inventory in crates/proto/src/lib.rs).
 
 export type Role = 'viewer' | 'operator' | 'admin';
 

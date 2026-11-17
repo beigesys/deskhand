@@ -26,12 +26,12 @@ git clone --recursive <repo-url> deskhand && cd deskhand
 # or, in an existing checkout: git submodule update --init
 ```
 
-The dashboard is a React app (`web/`) that `deskhand-server` embeds, so build it first.
+The dashboard is a React app (`apps/web/`) that `deskhand-server` embeds, so build it first.
 [Bun](https://bun.sh) is a build-time tool only, like esbuild; the server's `build.rs`
-runs these two commands itself if `web/dist` is missing and `bun` is on `PATH`:
+runs these two commands itself if `apps/web/dist` is missing and `bun` is on `PATH`:
 
 ```sh
-cd web && bun install --frozen-lockfile && bun run build && cd ..
+cd apps/web && bun install --frozen-lockfile && bun run build && cd ../..
 ```
 
 Linux, static musl binaries:
@@ -123,11 +123,11 @@ The device list shows each machine online or offline. **Desktop** opens its scre
 
 ## The web app
 
-- `web/`: React 19, TypeScript, Tailwind v4, TanStack Router and Query, Radix primitives
+- `apps/web/`: React 19, TypeScript, Tailwind v4, TanStack Router and Query, Radix primitives
   styled as Deskhand's own (no stock shadcn look), CodeMirror for scripts. Built with
-  bun and Vite into `web/dist`, which `deskhand-server` embeds; the server serves it at
+  bun and Vite into `apps/web/dist`, which `deskhand-server` embeds; the server serves it at
   `/` and answers `/api/v1` (JSON, same cookie sessions and roles).
-- Look: `web/src/theme.css` holds every color, font, radius and density value. Palettes
+- Look: `apps/web/src/theme.css` holds every color, font, radius and density value. Palettes
   (Graphite, Harbor, Field, Paper, Navy) each set the sidebar, the accent and the page
   neutrals for light and dark; each user picks one in the user menu (kept in that
   browser). Admins see the tokens and components at `/style`.
@@ -142,14 +142,14 @@ Develop with the Rust server on 8080 and Vite's dev server in front of it:
 
 ```sh
 DESKHAND_ADMIN_PASSWORD=admin-password cargo run -p deskhand-server   # terminal 1
-cd web && bun run dev                                                 # terminal 2: http://localhost:5173
+cd apps/web && bun run dev                                                 # terminal 2: http://localhost:5173
 ```
 
 Tests:
 
 ```sh
 cargo test -p deskhand-server       # unit tests, plus tests/api.rs: the API end to end and 5,000 devices
-cd web && bun run typecheck
+cd apps/web && bun run typecheck
 scripts/e2e-web.sh                  # Playwright: server + agent on Xvfb; sign in, devices, run a script, phone layout, 5,000-device picker
 ```
 
@@ -176,16 +176,16 @@ chromium`, or `PW_CHROMIUM=/path/to/chrome`); `DESKHAND_SHOTS=DIR` saves screens
 
 ## How it fits together
 
-- `server/`: dashboard, sign-in, and a relay. `/d/{id}/` proxies the browser to that
+- `apps/server/`: dashboard, sign-in, and a relay. `/d/{id}/` proxies the browser to that
   device's voxl through the agent.
-- `agent/`: runs voxl on a random loopback port and keeps a control socket open to the
+- `apps/agent/`: runs voxl on a random loopback port and keeps a control socket open to the
   server. For each browser request the server asks for a stream, and the agent opens
   one and pipes it to voxl. It also runs shells, jobs and inventory.
 - Inventory: the agent reports OS, hardware, disks, network, installed software and
   security state (BitLocker/LUKS, Defender, firewall, pending reboot) when it connects,
   every 4 hours, and on Refresh. The server keeps the last 30 snapshots per device and
   shows them at `/devices/{id}`; `/devices.csv` exports the device list.
-- `proto/`: the control messages they exchange.
+- `crates/proto/`: the control messages they exchange.
 
 ## Server settings
 

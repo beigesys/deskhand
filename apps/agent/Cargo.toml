@@ -9,8 +9,8 @@ name = "deskhand-agent"
 path = "src/main.rs"
 
 [dependencies]
-deskhand-proto = { path = "../proto" }
-voxl = { package = "voxl-server", path = "../vendor/voxl" }
+deskhand-proto = { path = "../../crates/proto" }
+voxl = { package = "voxl-server", path = "../../vendor/voxl" }
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", features = ["sink"] }

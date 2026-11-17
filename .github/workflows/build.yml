@@ -51,10 +51,10 @@ jobs:
       - uses: actions/cache@v4.2.3
         with:
           path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('web/bun.lock') }}
+          key: bun-${{ runner.os }}-${{ hashFiles('apps/web/bun.lock') }}
       # The web app is embedded in deskhand-server, so it's built first.
       - name: Web app
-        working-directory: web
+        working-directory: apps/web
         run: |
           bun install --frozen-lockfile
           bun run build
@@ -109,7 +109,7 @@ jobs:
         with:
           bun-version: ${{ env.BUN_VERSION }}
       - name: Web app
-        working-directory: web
+        working-directory: apps/web
         run: |
           bun install --frozen-lockfile
           bun run build

@@ -9,7 +9,7 @@ name = "deskhand-server"
 path = "src/main.rs"
 
 [dependencies]
-deskhand-proto = { path = "../proto" }
+deskhand-proto = { path = "../../crates/proto" }
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 hyper = { version = "1", features = ["client", "http1"] }

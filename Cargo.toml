@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["proto", "server", "agent", "vendor/voxl"]
+members = ["crates/proto", "apps/server", "apps/agent", "vendor/voxl"]
 
 [workspace.package]
 version = "0.1.0"

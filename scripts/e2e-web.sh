@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end check of the web app: starts a server with a fresh database, enrolls and
-# runs an agent on a throwaway X display, then runs the Playwright tests in web/e2e.
+# runs an agent on a throwaway X display, then runs the Playwright tests in apps/web/e2e.
 # Screenshots go to $DESKHAND_SHOTS if set.
 #   scripts/e2e-web.sh            (builds debug binaries first)
 #   PW_CHROMIUM=/path/to/chrome   use a Chromium other than Playwright's own
@@ -17,7 +17,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-(cd "$root/web" && bun run build >/dev/null)
+(cd "$root/apps/web" && bun run build >/dev/null)
 cargo build -q -p deskhand-server -p deskhand-agent --manifest-path "$root/Cargo.toml"
 bin=$root/target/debug
 
@@ -42,5 +42,5 @@ for _ in $(seq 100); do
 	sleep 0.1
 done
 
-cd "$root/web"
+cd "$root/apps/web"
 DESKHAND_URL=$base DESKHAND_DEVICE=$host bunx playwright test "$@" || { tail -n 20 "$work/server.log" "$work/agent.log"; exit 1; }

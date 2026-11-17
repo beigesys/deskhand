@@ -1,4 +1,4 @@
-//! The web app (web/dist, built with bun) embedded in the binary, and the path rewriting
+//! The web app (apps/web/dist, built with bun) embedded in the binary, and the path rewriting
 //! that keeps the classic pages working under `/classic/`.
 
 use axum::body::Body;
@@ -41,7 +41,7 @@ pub async fn spa(uri: Uri) -> Response {
             f.data,
         )
             .into_response(),
-        None => (StatusCode::NOT_FOUND, "the web app wasn't built (cd web && bun run build)").into_response(),
+        None => (StatusCode::NOT_FOUND, "the web app wasn't built (cd apps/web && bun run build)").into_response(),
     }
 }
 

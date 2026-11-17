@@ -1,5 +1,5 @@
 //! The web app in ../web/dist is embedded into the binary (src/web.rs). Build it first with
-//! `cd web && bun install && bun run build`; if it's missing and bun is on PATH (or BUN
+//! `cd apps/web && bun install && bun run build`; if it's missing and bun is on PATH (or BUN
 //! points at it), this does that.
 
 use std::path::Path;
@@ -24,8 +24,8 @@ fn main() {
     };
     if !(run(&["install", "--frozen-lockfile"]) && run(&["run", "build"])) || !dist.join("index.html").exists() {
         panic!(
-            "web/dist is missing and building it failed. Install bun (https://bun.sh) and run \
-             `cd web && bun install && bun run build`, or set BUN to bun's path."
+            "apps/web/dist is missing and building it failed. Install bun (https://bun.sh) and run \
+             `cd apps/web && bun install && bun run build`, or set BUN to bun's path."
         );
     }
 }

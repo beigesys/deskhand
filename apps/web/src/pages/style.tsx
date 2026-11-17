@@ -63,7 +63,7 @@ export function StylePage() {
 	];
 	return (
 		<>
-			<PageHeader title="Style guide" sub="Tokens live in web/src/theme.css; change them there to restyle everything." />
+			<PageHeader title="Style guide" sub="Tokens live in apps/web/src/theme.css; change them there to restyle everything." />
 			<div className="grid gap-4">
 				<Panel title="Color tokens">
 					<div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
