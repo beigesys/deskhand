@@ -1,6 +1,7 @@
 //! Signing in: argon2 passwords, cookie sessions in the database (7 days, sliding), roles,
 //! first-run setup, a login rate limit, and the Origin check on state-changing requests.
 
+use crate::audit::Entry;
 use crate::db::{Role, User};
 use crate::{now, random_hex, ui, App, Shared};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
@@ -238,11 +239,38 @@ pub async fn login(
     let found = app.db.user_by_name(f.username.trim()).ok().flatten();
     let hash = found.as_ref().map(|(_, h)| h.as_str()).unwrap_or(dummy_hash());
     let ok = verify_password(&f.password, hash);
-    let Some((user, _)) = found.filter(|_| ok) else {
-        app.db.audit(now(), None, None, "login.failed", &format!("{} from {ip}", f.username.trim()));
+    let Some((user, _)) = found.as_ref().filter(|_| ok) else {
+        login_failed(&app, f.username.trim(), found.as_ref().map(|(u, _)| u.id));
         return Redirect::to("/login?bad").into_response();
     };
-    start_session(&app, &headers, &user, "login", &format!("password from {ip}"))
+    classic_password_ok(&app, &headers, user, "password")
+}
+
+/// Audits a wrong user name or password.
+pub(crate) fn login_failed(app: &App, username: &str, user: Option<i64>) {
+    let mut e = Entry::new("login.failed")
+        .detail(format!("{username}: wrong user name or password"))
+        .data(serde_json::json!({ "username": username, "reason": "password" }));
+    if let Some(id) = user {
+        e = e.target("user", id);
+    }
+    app.db.record(e);
+}
+
+/// The classic pages can't do the second step: users with two-step sign-in use the web app.
+fn classic_password_ok(app: &App, headers: &HeaderMap, user: &User, detail: &str) -> Response {
+    match crate::mfa::after_password(app, user) {
+        Ok(crate::mfa::Next::Session) => start_session(app, headers, user, "login", detail),
+        Ok(_) => message(
+            StatusCode::FORBIDDEN,
+            "Two-step sign-in",
+            r#"<p>This account uses two-step sign-in. <a href="/login">Sign in here</a>.</p>"#,
+        ),
+        Err(e) => {
+            log::error!("mfa state: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 /// Starts a session for `user` and audits it: the Set-Cookie value that carries it.
@@ -254,7 +282,7 @@ pub(crate) fn new_session(app: &App, headers: &HeaderMap, user: &User, action: &
         return None;
     }
     let _ = app.db.purge_sessions(now);
-    app.db.audit(now, Some(user.id), None, action, detail);
+    app.db.record(Entry::new(action).at(now).by(user.id).target("user", user.id).detail(detail));
     Some(session_cookie(app, headers, &token))
 }
 
@@ -268,7 +296,7 @@ fn start_session(app: &App, headers: &HeaderMap, user: &User, action: &str, deta
 pub async fn logout(State(app): State<Shared>, headers: HeaderMap) -> Response {
     if let Some(token) = cookie_value(&headers) {
         if let Some(u) = user(&app, &headers) {
-            app.db.audit(now(), Some(u.id), None, "logout", "");
+            app.db.record(Entry::new("logout").by(u.id).target("user", u.id));
         }
         let _ = app.db.delete_session(&token);
     }
@@ -331,8 +359,8 @@ pub async fn setup(
     let Some((user, _)) = app.db.user_by_name(f.username.trim()).ok().flatten() else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
-    app.db.audit(now(), Some(user.id), None, "setup", "first admin created");
-    start_session(&app, &headers, &user, "login", &format!("setup from {ip}"))
+    app.db.record(Entry::new("setup").by(user.id).target("user", user.id).detail("first admin created"));
+    classic_password_ok(&app, &headers, &user, "first-run setup")
 }
 
 // --- single sign-on ---
@@ -381,7 +409,7 @@ pub async fn sso_callback(
         Ok(id) => id,
         Err(e) => {
             log::warn!("{} sign-in from {ip}: {e}", kind.label());
-            app.db.audit(now(), None, None, "sso.failed", &format!("{}: {e} (from {ip})", kind.key()));
+            app.db.record(Entry::new("sso.failed").detail(format!("{}: {e}", kind.key())));
             let status = if matches!(e, SsoError::Provider(_)) { StatusCode::BAD_GATEWAY } else { StatusCode::FORBIDDEN };
             return message(status, "Sign-in failed", &format!("<p>{}</p>", ui::esc(&e.to_string())));
         }
@@ -394,10 +422,10 @@ pub async fn sso_callback(
                 Resolved::Provisioned => app.db.audit(now(), Some(user.id), None, "sso.provision", &format!("{what} as {}", user.role.as_str())),
                 Resolved::Known => {}
             }
-            start_session(&app, &headers, &user, "sso.login", &format!("{what} from {ip}"))
+            start_session(&app, &headers, &user, "sso.login", &what)
         }
         Ok(None) => {
-            app.db.audit(now(), None, None, "sso.denied", &format!("{} {} has no user (from {ip})", kind.key(), id.display));
+            app.db.record(Entry::new("sso.denied").detail(format!("{} {} has no user", kind.key(), id.display)));
             let email = match &id.verified_email {
                 Some(e) => format!("<p>Ask an admin to add a user with the email <b>{}</b>, then sign in again.</p>", ui::esc(e)),
                 None => format!(

@@ -1,6 +1,7 @@
 //! The server's SQLite database: users, sessions, groups, devices, enrollment tokens and
 //! the audit log. One connection behind a mutex; every query here is small.
 
+use crate::audit::Entry;
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::sync::Mutex;
@@ -153,6 +154,27 @@ CREATE INDEX job_runs_job_id ON job_runs(job_id, id);
 "#, r#"
 -- The agent version each device last connected with ('' if unknown).
 ALTER TABLE devices ADD COLUMN agent_version TEXT NOT NULL DEFAULT '';
+"#, r#"
+-- Audit entries name the client IP and what was acted on, with structured details.
+ALTER TABLE audit ADD COLUMN ip TEXT;
+ALTER TABLE audit ADD COLUMN target_kind TEXT;
+ALTER TABLE audit ADD COLUMN target_id TEXT;
+ALTER TABLE audit ADD COLUMN detail_json TEXT;
+CREATE INDEX audit_target ON audit(target_kind, target_id, id);
+-- Two-factor sign-in: the TOTP secret (base32) once confirmed, the last time step used
+-- (so a code works once), and one-time recovery codes (argon2 hashes).
+ALTER TABLE users ADD COLUMN totp_secret TEXT;
+ALTER TABLE users ADD COLUMN totp_enabled_at INTEGER;
+ALTER TABLE users ADD COLUMN totp_last_step INTEGER NOT NULL DEFAULT 0;
+-- A secret shown to the user but not yet confirmed with a code.
+ALTER TABLE users ADD COLUMN totp_pending TEXT;
+CREATE TABLE recovery_codes (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    code_hash TEXT NOT NULL,
+    used_at INTEGER
+);
+CREATE INDEX recovery_codes_user ON recovery_codes(user_id);
 "#];
 
 /// The first private IPv4 address on a real interface (not loopback, Docker or a bridge).
@@ -297,12 +319,45 @@ pub struct EnrollToken {
     pub uses: i64,
 }
 
+/// A user's two-factor settings.
+pub struct MfaState {
+    /// Base32 TOTP secret, when two-factor is on.
+    pub secret: Option<String>,
+    pub enabled_at: Option<i64>,
+    pub last_step: i64,
+    /// A secret shown for enrollment but not yet confirmed.
+    pub pending: Option<String>,
+    /// False for users who can only sign in with single sign-on.
+    pub has_password: bool,
+    pub recovery_left: i64,
+}
+
+#[derive(Default)]
 pub struct AuditRow {
     pub ts: i64,
     pub user: Option<String>,
     pub device: Option<String>,
     pub action: String,
     pub detail: String,
+    pub ip: Option<String>,
+    pub target_kind: Option<String>,
+    pub target_id: Option<String>,
+    /// The target's current name, when it still exists.
+    pub target_name: Option<String>,
+    /// `detail_json`, as stored.
+    pub data: Option<String>,
+    pub user_id: Option<i64>,
+    pub device_id: Option<String>,
+}
+
+/// What [`Db::audit_page`] narrows to. `action` ending in `.` matches the whole family
+/// (`shell.` is `shell.open` and `shell.close`).
+#[derive(Default)]
+pub struct AuditFilter<'a> {
+    pub action: Option<&'a str>,
+    pub q: Option<&'a str>,
+    pub user: Option<i64>,
+    pub device: Option<&'a str>,
 }
 
 type R<T> = rusqlite::Result<T>;
@@ -379,6 +434,107 @@ impl Db {
 
     pub fn delete_user(&self, id: i64) -> R<usize> {
         self.c().execute("DELETE FROM users WHERE id = ?1", [id])
+    }
+
+    // --- two-factor sign-in ---
+
+    pub fn mfa_state(&self, user: i64) -> R<Option<MfaState>> {
+        self.c()
+            .query_row(
+                "SELECT totp_secret, totp_enabled_at, totp_last_step, totp_pending, password_hash != '!',
+                        (SELECT count(*) FROM recovery_codes r WHERE r.user_id = u.id AND r.used_at IS NULL)
+                 FROM users u WHERE id = ?1",
+                [user],
+                |r| {
+                    Ok(MfaState {
+                        secret: r.get(0)?,
+                        enabled_at: r.get(1)?,
+                        last_step: r.get(2)?,
+                        pending: r.get(3)?,
+                        has_password: r.get(4)?,
+                        recovery_left: r.get(5)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    pub fn set_totp_pending(&self, user: i64, secret: Option<&str>) -> R<usize> {
+        self.c().execute("UPDATE users SET totp_pending = ?1 WHERE id = ?2", params![secret, user])
+    }
+
+    /// Turns two-factor on with `secret`, used at `step`, replacing any recovery codes.
+    pub fn enable_totp(&self, user: i64, secret: &str, step: i64, now: i64, code_hashes: &[String]) -> R<()> {
+        let mut c = self.c();
+        let t = c.transaction()?;
+        t.execute(
+            "UPDATE users SET totp_secret = ?1, totp_enabled_at = ?2, totp_last_step = ?3, totp_pending = NULL
+             WHERE id = ?4",
+            params![secret, now, step, user],
+        )?;
+        t.execute("DELETE FROM recovery_codes WHERE user_id = ?1", [user])?;
+        for h in code_hashes {
+            t.execute("INSERT INTO recovery_codes (user_id, code_hash) VALUES (?1, ?2)", params![user, h])?;
+        }
+        t.commit()
+    }
+
+    pub fn disable_totp(&self, user: i64) -> R<usize> {
+        let mut c = self.c();
+        let t = c.transaction()?;
+        let n = t.execute(
+            "UPDATE users SET totp_secret = NULL, totp_enabled_at = NULL, totp_last_step = 0, totp_pending = NULL
+             WHERE id = ?1",
+            [user],
+        )?;
+        t.execute("DELETE FROM recovery_codes WHERE user_id = ?1", [user])?;
+        t.commit()?;
+        Ok(n)
+    }
+
+    /// Records `step` as used if it's later than the last one: false means the code was
+    /// already used (or an older one was), so it must be refused.
+    pub fn claim_totp_step(&self, user: i64, step: i64) -> R<bool> {
+        Ok(self.c().execute(
+            "UPDATE users SET totp_last_step = ?1 WHERE id = ?2 AND totp_last_step < ?1",
+            params![step, user],
+        )? == 1)
+    }
+
+    pub fn replace_recovery_codes(&self, user: i64, code_hashes: &[String]) -> R<()> {
+        let mut c = self.c();
+        let t = c.transaction()?;
+        t.execute("DELETE FROM recovery_codes WHERE user_id = ?1", [user])?;
+        for h in code_hashes {
+            t.execute("INSERT INTO recovery_codes (user_id, code_hash) VALUES (?1, ?2)", params![user, h])?;
+        }
+        t.commit()
+    }
+
+    /// Unused recovery codes: (id, argon2 hash).
+    pub fn recovery_codes(&self, user: i64) -> R<Vec<(i64, String)>> {
+        let c = self.c();
+        let mut s = c.prepare("SELECT id, code_hash FROM recovery_codes WHERE user_id = ?1 AND used_at IS NULL")?;
+        let rows = s.query_map([user], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect()
+    }
+
+    /// Marks a recovery code used: false if it already was.
+    pub fn use_recovery_code(&self, id: i64, now: i64) -> R<bool> {
+        Ok(self
+            .c()
+            .execute("UPDATE recovery_codes SET used_at = ?1 WHERE id = ?2 AND used_at IS NULL", params![now, id])?
+            == 1)
+    }
+
+    /// Which of `ids` (a JSON array) have two-factor on.
+    pub fn mfa_enabled_of(&self, ids: &str) -> R<Vec<i64>> {
+        let c = self.c();
+        let mut s = c.prepare(
+            "SELECT id FROM users WHERE id IN (SELECT value FROM json_each(?1)) AND totp_secret IS NOT NULL",
+        )?;
+        let rows = s.query_map([ids], |r| r.get(0))?;
+        rows.collect()
     }
 
     pub fn admin_count(&self) -> R<i64> {
@@ -796,43 +952,80 @@ impl Db {
 
     // --- audit ---
 
+    /// Shorthand for [`Db::record`]: the device, when given, is also the target.
     pub fn audit(&self, ts: i64, user: Option<i64>, device: Option<&str>, action: &str, detail: &str) {
+        let mut e = Entry::new(action).at(ts).by(user).detail(detail);
+        if let Some(d) = device {
+            e = e.device(d);
+        }
+        self.record(e);
+    }
+
+    pub fn record(&self, e: Entry) {
+        let target = e.target.clone().or_else(|| e.device.clone().map(|d| ("device", d)));
         let r = self.c().execute(
-            "INSERT INTO audit (ts, user_id, device_id, action, detail) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![ts, user, device, action, detail],
+            "INSERT INTO audit (ts, user_id, device_id, action, detail, ip, target_kind, target_id, detail_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                e.ts,
+                e.user,
+                e.device,
+                e.action,
+                e.detail,
+                e.ip.map(|ip| ip.to_string()),
+                target.as_ref().map(|t| t.0),
+                target.as_ref().map(|t| t.1.as_str()),
+                e.data.map(|d| d.to_string()),
+            ],
         );
-        if let Err(e) = r {
-            log::error!("audit write failed: {e}");
+        if let Err(err) = r {
+            log::error!("audit write failed: {err}");
         }
     }
 
     /// A page of the audit log, newest first: rows older than `before` (an audit id), with
-    /// the action starting with `action` and the user name / device / detail containing `q`.
-    pub fn audit_page(
-        &self,
-        before: Option<i64>,
-        limit: i64,
-        action: Option<&str>,
-        q: Option<&str>,
-        user: Option<i64>,
-        device: Option<&str>,
-    ) -> R<Vec<(i64, AuditRow)>> {
+    /// the action equal to `action` and the user name / device / detail / IP containing
+    /// `q`. `device` matches entries on that device or targeting it.
+    pub fn audit_page(&self, before: Option<i64>, limit: i64, f: &AuditFilter) -> R<Vec<(i64, AuditRow)>> {
         let c = self.c();
         let mut s = c.prepare(
-            "SELECT a.id, a.ts, u.username, coalesce(d.name, a.device_id), a.action, a.detail FROM audit a
+            "SELECT a.id, a.ts, u.username, coalesce(d.name, a.device_id), a.action, a.detail,
+                    a.ip, a.target_kind, a.target_id, a.detail_json, a.user_id, a.device_id,
+                    CASE a.target_kind WHEN 'user' THEN tu.username WHEN 'group' THEN tg.name
+                        WHEN 'job' THEN tj.name WHEN 'script' THEN ts.name WHEN 'device' THEN td.name END AS target_name
+             FROM audit a
              LEFT JOIN users u ON u.id = a.user_id LEFT JOIN devices d ON d.id = a.device_id
+             LEFT JOIN users tu ON a.target_kind = 'user' AND tu.id = a.target_id
+             LEFT JOIN groups tg ON a.target_kind = 'group' AND tg.id = a.target_id
+             LEFT JOIN jobs tj ON a.target_kind = 'job' AND tj.id = a.target_id
+             LEFT JOIN scripts ts ON a.target_kind = 'script' AND ts.id = a.target_id
+             LEFT JOIN devices td ON a.target_kind = 'device' AND td.id = a.target_id
              WHERE (?1 IS NULL OR a.id < ?1)
-               AND (?2 IS NULL OR a.action = ?2)
+               AND (?2 IS NULL OR a.action = ?2 OR (substr(?2, -1) = '.' AND a.action LIKE ?2 || '%'))
                AND (?5 IS NULL OR a.user_id = ?5)
-               AND (?6 IS NULL OR a.device_id = ?6)
+               AND (?6 IS NULL OR a.device_id = ?6
+                    OR (a.target_kind = 'device' AND a.target_id = ?6))
                AND (?3 IS NULL OR u.username LIKE '%' || ?3 || '%' OR d.name LIKE '%' || ?3 || '%'
-                    OR a.detail LIKE '%' || ?3 || '%')
+                    OR a.detail LIKE '%' || ?3 || '%' OR a.ip LIKE ?3 || '%' OR target_name LIKE '%' || ?3 || '%')
              ORDER BY a.id DESC LIMIT ?4",
         )?;
-        let rows = s.query_map(params![before, action, q, limit, user, device], |r| {
+        let rows = s.query_map(params![before, f.action, f.q, limit, f.user, f.device], |r| {
             Ok((
                 r.get(0)?,
-                AuditRow { ts: r.get(1)?, user: r.get(2)?, device: r.get(3)?, action: r.get(4)?, detail: r.get(5)? },
+                AuditRow {
+                    ts: r.get(1)?,
+                    user: r.get(2)?,
+                    device: r.get(3)?,
+                    action: r.get(4)?,
+                    detail: r.get(5)?,
+                    ip: r.get(6)?,
+                    target_kind: r.get(7)?,
+                    target_id: r.get(8)?,
+                    data: r.get(9)?,
+                    user_id: r.get(10)?,
+                    device_id: r.get(11)?,
+                    target_name: r.get(12)?,
+                },
             ))
         })?;
         rows.collect()
@@ -860,6 +1053,7 @@ impl Db {
                 device: r.get(2)?,
                 action: r.get(3)?,
                 detail: r.get(4)?,
+                ..Default::default()
             })
         })?;
         rows.collect()

@@ -159,16 +159,48 @@ export interface User {
 	created: number;
 	email: string | null;
 	identities: Identity[];
+	/** Two-step sign-in (TOTP) is on. */
+	mfa_enabled: boolean;
 }
 
 export interface AuditRow {
 	id: number;
 	ts: number;
+	/** Who did it. */
 	user: string | null;
+	user_id: number | null;
+	/** The device it happened on, by name. */
 	device: string | null;
+	device_id: string | null;
+	ip: string | null;
 	action: string;
+	/** What it was done to: `user`, `group`, `enroll_token`, `job`, `script`, `device`. */
+	target_kind: string | null;
+	target_id: string | null;
+	/** The target's current name, if it still exists. */
+	target_name: string | null;
 	detail: string;
+	data: Record<string, unknown> | null;
 }
+
+export interface MfaStatus {
+	enabled: boolean;
+	enabled_at: number | null;
+	recovery_left: number;
+	/** Signs in with a password (two-step is for those who do). */
+	password_user: boolean;
+	/** The server requires two-step for password users. */
+	required: boolean;
+}
+
+export interface MfaEnrollment {
+	secret: string;
+	uri: string;
+	qr_svg: string;
+}
+
+/** What `POST /login` (and `/setup`) answers: signed in, or a second step to do. */
+export type LoginResult = Me | { mfa_required: true; mfa_token: string } | { mfa_enroll_required: true; mfa_token: string };
 
 
 

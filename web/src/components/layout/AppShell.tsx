@@ -13,6 +13,7 @@ import {
 	Palette as PaletteIcon,
 	PlayCircle,
 	ScrollText,
+	ShieldCheck,
 	Sun,
 	SunMoon,
 	Ticket,
@@ -138,6 +139,10 @@ function UserMenu() {
 				<span className="hidden lg:inline">{me.username}</span>
 			</MenuTrigger>
 			<MenuContent>
+				<MenuItem onSelect={() => navigate({ to: '/account' })}>
+					<ShieldCheck /> Account &amp; two-step sign-in
+				</MenuItem>
+				<MenuSeparator />
 				<MenuLabel>Theme</MenuLabel>
 				{(
 					[

@@ -4,8 +4,9 @@
 //! Errors are `{"error": "..."}` with 400 (bad input), 401 (not signed in), 403 (role),
 //! 404, 409 (conflict) or 500.
 
+use crate::audit::Entry;
 use crate::auth::{self, base_url};
-use crate::db::{AuditRow, Role, User};
+use crate::db::{AuditFilter, AuditRow, Role, User};
 use crate::jobs::{self, Counts, Job, Run, Task};
 use crate::jobs_ui;
 use crate::{now, random_hex, send_to_agent, Shared};
@@ -37,6 +38,7 @@ pub fn router() -> Router<Shared> {
         .route("/devices/{id}/rename", post(rename_device))
         .route("/devices/{id}/move", post(move_device))
         .route("/devices/{id}/refresh", post(refresh_device))
+        .route("/devices/{id}/activity", get(device_activity))
         .route("/groups", get(groups).post(add_group))
         .route("/groups/{id}", delete(delete_group))
         .route("/enroll-tokens", get(enroll_tokens).post(add_enroll_token))
@@ -56,12 +58,13 @@ pub fn router() -> Router<Shared> {
         .route("/jobs/{id}/events", get(jobs_ui::events))
         .route("/jobs/{id}/runs", get(job_runs))
         .route("/jobs/{id}/{op}", post(job_op))
+        .merge(crate::mfa::router())
         .fallback(|| async { ApiError(StatusCode::NOT_FOUND, "no such API endpoint".into()) })
 }
 
 // --- errors and auth ---
 
-pub struct ApiError(StatusCode, String);
+pub struct ApiError(pub StatusCode, pub String);
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
@@ -82,18 +85,18 @@ impl From<(StatusCode, String)> for ApiError {
     }
 }
 
-type Api<T> = Result<Json<T>, ApiError>;
+pub(crate) type Api<T> = Result<Json<T>, ApiError>;
 
-fn err(code: StatusCode, msg: impl Into<String>) -> ApiError {
+pub(crate) fn err(code: StatusCode, msg: impl Into<String>) -> ApiError {
     ApiError(code, msg.into())
 }
 
-fn bad(msg: impl Into<String>) -> ApiError {
+pub(crate) fn bad(msg: impl Into<String>) -> ApiError {
     err(StatusCode::BAD_REQUEST, msg)
 }
 
 /// The signed-in user if their role is at least `min`.
-fn need(app: &Shared, headers: &HeaderMap, min: Role) -> Result<User, ApiError> {
+pub(crate) fn need(app: &Shared, headers: &HeaderMap, min: Role) -> Result<User, ApiError> {
     match auth::user(app, headers) {
         Some(u) if u.role >= min => Ok(u),
         Some(_) => Err(err(StatusCode::FORBIDDEN, "your role doesn't allow this")),
@@ -101,7 +104,7 @@ fn need(app: &Shared, headers: &HeaderMap, min: Role) -> Result<User, ApiError> 
     }
 }
 
-fn ok() -> Json<serde_json::Value> {
+pub(crate) fn ok() -> Json<serde_json::Value> {
     Json(json!({ "ok": true }))
 }
 
@@ -165,13 +168,13 @@ fn page<T, C: Serialize>(mut rows: Vec<T>, limit: i64, key: impl Fn(&T) -> C) ->
 // --- signing in ---
 
 #[derive(Serialize)]
-struct Me {
+pub(crate) struct Me {
     id: i64,
     username: String,
     role: &'static str,
 }
 
-fn me_of(u: &User) -> Me {
+pub(crate) fn me_of(u: &User) -> Me {
     Me { id: u.id, username: u.username.clone(), role: u.role.as_str() }
 }
 
@@ -211,7 +214,7 @@ struct LoginBody {
     password: String,
 }
 
-fn signed_in(app: &Shared, headers: &HeaderMap, user: &User, action: &str, detail: &str) -> Result<Response, ApiError> {
+pub(crate) fn signed_in(app: &Shared, headers: &HeaderMap, user: &User, action: &str, detail: &str) -> Result<Response, ApiError> {
     let cookie = auth::new_session(app, headers, user, action, detail)
         .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "couldn't start a session"))?;
     Ok(([(header::SET_COOKIE, cookie)], Json(me_of(user))).into_response())
@@ -233,17 +236,17 @@ async fn login(
     let found = app.db.user_by_name(b.username.trim()).ok().flatten();
     let hash = found.as_ref().map(|(_, h)| h.as_str()).unwrap_or(auth::dummy_hash());
     let good = auth::verify_password(&b.password, hash);
-    let Some((user, _)) = found.filter(|_| good) else {
-        app.db.audit(now(), None, None, "login.failed", &format!("{} from {ip}", b.username.trim()));
+    let Some((user, _)) = found.as_ref().filter(|_| good) else {
+        auth::login_failed(&app, b.username.trim(), found.as_ref().map(|(u, _)| u.id));
         return Err(err(StatusCode::UNAUTHORIZED, "wrong user name or password"));
     };
-    signed_in(&app, &headers, &user, "login", &format!("password from {ip}"))
+    crate::mfa::password_ok(&app, &headers, user, "password")
 }
 
 async fn logout(State(app): State<Shared>, headers: HeaderMap) -> Response {
     if let Some(token) = auth::cookie_value(&headers) {
         if let Some(u) = auth::user(&app, &headers) {
-            app.db.audit(now(), Some(u.id), None, "logout", "");
+            app.db.record(Entry::new("logout").by(u.id).target("user", u.id));
         }
         let _ = app.db.delete_session(&token);
     }
@@ -286,8 +289,8 @@ async fn setup(
         .db
         .user_by_name(&username)?
         .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "user vanished"))?;
-    app.db.audit(now(), Some(user.id), None, "setup", "first admin created");
-    signed_in(&app, &headers, &user, "login", &format!("setup from {ip}"))
+    app.db.record(Entry::new("setup").by(user.id).target("user", user.id).detail("first admin created"));
+    crate::mfa::password_ok(&app, &headers, &user, "first-run setup")
 }
 
 // --- devices ---
@@ -551,7 +554,7 @@ async fn delete_device(State(app): State<Shared>, headers: HeaderMap, Path(id): 
     app.db.delete_device(&id)?;
     // Its agent's secret is gone with it; drop the live connection too.
     app.agents.lock().unwrap().remove(&id);
-    app.db.audit(now(), Some(user.id), None, "device.delete", &format!("{name} ({id})"));
+    app.db.record(Entry::new("device.delete").by(user.id).target("device", &id).detail(&name));
     let _ = app.device_events.send(crate::DeviceEvent::Removed { id });
     Ok(ok())
 }
@@ -615,16 +618,17 @@ async fn add_group(State(app): State<Shared>, headers: HeaderMap, Json(b): Json<
         }
         Err(e) => return Err(e.into()),
     };
-    app.db.audit(now(), Some(user.id), None, "group.add", &name);
+    app.db.record(Entry::new("group.add").by(user.id).target("group", id).detail(&name));
     Ok(Json(json!({ "id": id })))
 }
 
 async fn delete_group(State(app): State<Shared>, headers: HeaderMap, Path(id): Path<i64>) -> Api<serde_json::Value> {
     let user = need(&app, &headers, Role::Admin)?;
+    let name = app.db.groups_page(None, Some(&format!("[{id}]")), None, 1)?.pop().map(|g| g.name);
     if app.db.delete_group(id)? == 0 {
         return Err(err(StatusCode::NOT_FOUND, "no such group"));
     }
-    app.db.audit(now(), Some(user.id), None, "group.delete", &format!("group {id}"));
+    app.db.record(Entry::new("group.delete").by(user.id).target("group", id).detail(name.unwrap_or_default()));
     Ok(ok())
 }
 
@@ -653,7 +657,7 @@ async fn enroll_tokens(State(app): State<Shared>, headers: HeaderMap, Query(f): 
         .map(|t| TokenOut { id: t.id, group: t.group, expires: t.expires, max_uses: t.max_uses, uses: t.uses })
         .collect();
     let mut rows = rows;
-    rows.sort_by(|a, b| b.id.cmp(&a.id));
+    rows.sort_by_key(|t| std::cmp::Reverse(t.id));
     rows.truncate(f.limit() as usize + 1);
     let (items, next) = page(rows, f.limit(), |t| t.id);
     Ok(Json(Page { items, next_cursor: next, total: None }))
@@ -709,12 +713,12 @@ async fn add_enroll_token(State(app): State<Shared>, headers: HeaderMap, Json(b)
     let token = random_hex(20);
     let now = now();
     let id = app.db.add_enroll_token(&token, b.group_id, now + hours * 3600, max_uses, now)?;
-    app.db.audit(
-        now,
-        Some(user.id),
-        None,
-        "enroll_token.create",
-        &format!("{max_uses} uses, {hours}h, group {}", b.group_id.map_or("none".into(), |g| g.to_string())),
+    app.db.record(
+        Entry::new("enroll_token.create")
+            .by(user.id)
+            .target("enroll_token", id)
+            .detail(format!("{max_uses} uses, {hours}h, group {}", b.group_id.map_or("none".into(), |g| g.to_string())))
+            .data(json!({ "max_uses": max_uses, "hours": hours, "group_id": b.group_id })),
     );
     let server = base_url(&app, &headers);
     Ok(Json(NewToken {
@@ -732,7 +736,7 @@ async fn revoke_enroll_token(State(app): State<Shared>, headers: HeaderMap, Path
     if app.db.revoke_enroll_token(id)? == 0 {
         return Err(err(StatusCode::NOT_FOUND, "no such token"));
     }
-    app.db.audit(now(), Some(user.id), None, "enroll_token.revoke", &format!("token {id}"));
+    app.db.record(Entry::new("enroll_token.revoke").by(user.id).target("enroll_token", id));
     Ok(ok())
 }
 
@@ -746,6 +750,7 @@ struct UserOut {
     created: i64,
     email: Option<String>,
     identities: Vec<IdentityOut>,
+    mfa_enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -773,11 +778,13 @@ async fn users(State(app): State<Shared>, headers: HeaderMap, Query(f): Query<Li
         let label = crate::sso::Kind::parse(&provider).map_or(provider.clone(), |k| k.label().to_owned());
         ids.entry(uid).or_default().push(IdentityOut { provider, label, email });
     }
+    let mfa: std::collections::HashSet<i64> = app.db.mfa_enabled_of(&page_ids)?.into_iter().collect();
     let items = rows
         .into_iter()
         .map(|(u, created, email)| UserOut {
             email,
             identities: ids.remove(&u.id).unwrap_or_default(),
+            mfa_enabled: mfa.contains(&u.id),
             id: u.id,
             username: u.username,
             role: u.role.as_str(),
@@ -833,7 +840,13 @@ async fn add_user(State(app): State<Shared>, headers: HeaderMap, Json(b): Json<N
     if let Some(e) = &email {
         app.db.set_email(id, Some(e))?;
     }
-    app.db.audit(now(), Some(user.id), None, "user.add", &format!("{username} as {}", role.as_str()));
+    app.db.record(
+        Entry::new("user.add")
+            .by(user.id)
+            .target("user", id)
+            .detail(format!("{username} as {}", role.as_str()))
+            .data(json!({ "username": username, "role": role.as_str(), "email": email })),
+    );
     Ok(Json(json!({ "id": id })))
 }
 
@@ -862,7 +875,7 @@ async fn set_role(
     if app.db.set_role(id, role)? != 1 {
         return Err(err(StatusCode::NOT_FOUND, "no such user"));
     }
-    app.db.audit(now(), Some(user.id), None, "user.role", &format!("user {id} -> {}", role.as_str()));
+    app.db.record(Entry::new("user.role").by(user.id).target("user", id).detail(role.as_str()).data(json!({ "role": role.as_str() })));
     Ok(ok())
 }
 
@@ -887,7 +900,9 @@ async fn set_email(
         }
         Err(e) => return Err(e.into()),
     }
-    app.db.audit(now(), Some(user.id), None, "user.email", &format!("user {id} -> {}", email.as_deref().unwrap_or("none")));
+    app.db.record(
+        Entry::new("user.email").by(user.id).target("user", id).detail(email.as_deref().unwrap_or("none")).data(json!({ "email": email })),
+    );
     Ok(ok())
 }
 
@@ -901,7 +916,7 @@ async fn delete_user(State(app): State<Shared>, headers: HeaderMap, Path(id): Pa
         return Err(err(StatusCode::NOT_FOUND, "no such user"));
     };
     app.db.delete_user(id)?;
-    app.db.audit(now(), Some(user.id), None, "user.delete", &name);
+    app.db.record(Entry::new("user.delete").by(user.id).target("user", id).detail(&name));
     Ok(ok())
 }
 
@@ -914,7 +929,7 @@ async fn unlink_identity(
     if app.db.unlink_identity(id, &provider)? == 0 {
         return Err(err(StatusCode::NOT_FOUND, "no such linked sign-in"));
     }
-    app.db.audit(now(), Some(user.id), None, "user.unlink", &format!("user {id}: {provider}"));
+    app.db.record(Entry::new("user.unlink").by(user.id).target("user", id).detail(&provider));
     Ok(ok())
 }
 
@@ -925,7 +940,9 @@ struct AuditQuery {
     #[serde(flatten)]
     list: ListQuery,
     action: Option<String>,
+    /// The acting user's id (`actor` is the same).
     user: Option<String>,
+    actor: Option<String>,
     device: Option<String>,
 }
 
@@ -934,24 +951,72 @@ struct AuditRowOut {
     id: i64,
     ts: i64,
     user: Option<String>,
+    user_id: Option<i64>,
     device: Option<String>,
+    device_id: Option<String>,
+    ip: Option<String>,
     action: String,
+    target_kind: Option<String>,
+    target_id: Option<String>,
+    target_name: Option<String>,
     detail: String,
+    data: Option<serde_json::Value>,
 }
 
+fn audit_out(id: i64, r: AuditRow) -> AuditRowOut {
+    AuditRowOut {
+        id,
+        ts: r.ts,
+        user: r.user,
+        user_id: r.user_id,
+        device: r.device,
+        device_id: r.device_id,
+        ip: r.ip,
+        action: r.action,
+        target_kind: r.target_kind,
+        target_id: r.target_id,
+        target_name: r.target_name,
+        detail: r.detail,
+        data: r.data.and_then(|d| serde_json::from_str(&d).ok()),
+    }
+}
+
+fn audit_list(app: &Shared, list: &ListQuery, f: &AuditFilter) -> Api<Page<AuditRowOut>> {
+    let limit = list.limit();
+    let rows = app.db.audit_page(list.after(), limit + 1, f)?;
+    let (rows, next) = page(rows, limit, |(id, _)| *id);
+    let items = rows.into_iter().map(|(id, r)| audit_out(id, r)).collect();
+    Ok(Json(Page { items, next_cursor: next, total: None }))
+}
+
+/// `GET /api/v1/audit?q=&action=&actor=&device=` (admin): the audit log, newest first.
+/// An action ending in `.` matches its family (`shell.`).
 async fn audit(State(app): State<Shared>, headers: HeaderMap, Query(q): Query<AuditQuery>) -> Api<Page<AuditRowOut>> {
     need(&app, &headers, Role::Admin)?;
-    let limit = q.list.limit();
-    let action = q.action.as_deref().filter(|s| !s.is_empty());
-    let device = q.device.as_deref().filter(|s| !s.is_empty());
-    let user = q.user.as_deref().and_then(|u| u.parse().ok());
-    let rows = app.db.audit_page(q.list.after(), limit + 1, action, q.list.q(), user, device)?;
-    let (rows, next) = page(rows, limit, |(id, _)| *id);
-    let items = rows
-        .into_iter()
-        .map(|(id, AuditRow { ts, user, device, action, detail })| AuditRowOut { id, ts, user, device, action, detail })
-        .collect();
-    Ok(Json(Page { items, next_cursor: next, total: None }))
+    let f = AuditFilter {
+        action: q.action.as_deref().filter(|s| !s.is_empty()),
+        q: q.list.q(),
+        user: q.actor.as_deref().or(q.user.as_deref()).and_then(|u| u.parse().ok()),
+        device: q.device.as_deref().filter(|s| !s.is_empty()),
+    };
+    audit_list(&app, &q.list, &f)
+}
+
+/// `GET /api/v1/devices/{id}/activity` (operators): the audit log for one device.
+async fn device_activity(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(q): Query<AuditQuery>,
+) -> Api<Page<AuditRowOut>> {
+    need(&app, &headers, Role::Operator)?;
+    let f = AuditFilter {
+        action: q.action.as_deref().filter(|s| !s.is_empty()),
+        q: q.list.q(),
+        user: None,
+        device: Some(&id),
+    };
+    audit_list(&app, &q.list, &f)
 }
 
 #[derive(Serialize)]
@@ -1033,7 +1098,7 @@ async fn add_script(State(app): State<Shared>, headers: HeaderMap, Json(b): Json
     let user = need(&app, &headers, Role::Operator)?;
     let (name, shell, body, timeout) = script_fields(b)?;
     let id = app.db.add_script(&name, shell, &body, timeout, user.id, now())?;
-    app.db.audit(now(), Some(user.id), None, "script.create", &format!("{id}: {name}"));
+    app.db.record(Entry::new("script.create").by(user.id).target("script", id).detail(&name));
     Ok(Json(json!({ "id": id })))
 }
 
@@ -1048,7 +1113,7 @@ async fn update_script(
     if app.db.update_script(id, &name, shell, &body, timeout, now())? == 0 {
         return Err(err(StatusCode::NOT_FOUND, "no such script"));
     }
-    app.db.audit(now(), Some(user.id), None, "script.update", &format!("{id}: {name}"));
+    app.db.record(Entry::new("script.update").by(user.id).target("script", id).detail(&name));
     Ok(ok())
 }
 
@@ -1056,7 +1121,7 @@ async fn delete_script(State(app): State<Shared>, headers: HeaderMap, Path(id): 
     let user = need(&app, &headers, Role::Operator)?;
     let name = app.db.script(id)?.map(|s| s.name).ok_or_else(|| err(StatusCode::NOT_FOUND, "no such script"))?;
     app.db.delete_script(id)?;
-    app.db.audit(now(), Some(user.id), None, "script.delete", &format!("{id}: {name}"));
+    app.db.record(Entry::new("script.delete").by(user.id).target("script", id).detail(&name));
     Ok(ok())
 }
 
@@ -1279,7 +1344,7 @@ async fn job_op(
         }
         _ => return Err(err(StatusCode::NOT_FOUND, "unknown job operation")),
     }
-    app.db.audit(now(), Some(user.id), None, &format!("job.{op}"), &format!("{id}: {name}"));
+    app.db.record(Entry::new(format!("job.{op}")).by(user.id).target("job", id).detail(&name));
     Ok(ok())
 }
 
@@ -1287,7 +1352,7 @@ async fn delete_job(State(app): State<Shared>, headers: HeaderMap, Path(id): Pat
     let user = need(&app, &headers, Role::Operator)?;
     let name = app.db.job(id)?.map(|j| j.name).ok_or_else(|| err(StatusCode::NOT_FOUND, "no such job"))?;
     app.db.delete_job(id)?;
-    app.db.audit(now(), Some(user.id), None, "job.delete", &format!("{id}: {name}"));
+    app.db.record(Entry::new("job.delete").by(user.id).target("job", id).detail(&name));
     Ok(ok())
 }
 

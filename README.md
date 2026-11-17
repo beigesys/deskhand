@@ -203,10 +203,20 @@ chromium`, or `PW_CHROMIUM=/path/to/chrome`); `DESKHAND_SHOTS=DIR` saves screens
 | `DESKHAND_ENTRA_*`, `DESKHAND_GOOGLE_*`, `DESKHAND_GITHUB_*` | unset | Single sign-on with Microsoft Entra ID, Google, GitHub: see [docs/sso.md](docs/sso.md) |
 | `DESKHAND_SSO_AUTO_PROVISION` | off | `viewer` or `operator`: create users on first SSO sign-in (restricted providers only) |
 | `DESKHAND_PASSWORD_LOGIN` | `1` | `0` hides password sign-in once an SSO provider is set up |
+| `DESKHAND_REQUIRE_MFA` | unset | `1`: password users must set up two-step sign-in before their next session |
 
 Roles: **viewer** sees devices, inventory and jobs; **operator** can also open desktops
 and shells and run jobs; **admin** manages devices, groups, enrollment tokens, users and
 reads the audit log.
+
+Two-step sign-in: password users can turn on an authenticator app (TOTP) under
+Account, and get ten one-time recovery codes. An admin can reset it for a user who lost
+their phone. Single sign-on skips it; the identity provider does MFA.
+
+Audit log: sign-ins (and failures), two-step changes, user / group / enrollment-token
+changes, desktop and shell sessions (opened, closed, how long), jobs and power actions,
+each with the user, client IP and what it was done to. Admins read it under Audit;
+operators see a device's own entries on its Activity tab.
 
 ## License
 

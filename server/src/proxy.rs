@@ -4,7 +4,9 @@
 
 use crate::auth::require;
 use crate::db::Role;
+use crate::audit::Entry;
 use crate::{now, open_stream, Shared};
+use serde_json::json;
 use deskhand_proto::StreamKind;
 use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, WebSocket};
@@ -33,9 +35,12 @@ pub async fn device(State(app): State<Shared>, mut req: Request) -> Response {
         return (StatusCode::NOT_FOUND, "device offline").into_response();
     };
     // The page's video socket marks a desktop session; its other requests are assets.
-    if rest == "ws" {
-        app.db.audit(now(), Some(user.id), Some(&id), "desktop.open", "");
+    let desktop = rest == "ws";
+    let session = crate::random_hex(6);
+    if desktop {
+        app.db.record(Entry::new("desktop.open").by(user.id).device(&id).data(json!({ "session": session })));
     }
+    let ip = crate::audit::current_ip();
     let Some(ws) = open_stream(&app, &id, StreamKind::Desktop).await else {
         return (StatusCode::BAD_GATEWAY, "device didn't open a stream").into_response();
     };
@@ -78,11 +83,24 @@ pub async fn device(State(app): State<Shared>, mut req: Request) -> Response {
     if resp.status() == StatusCode::SWITCHING_PROTOCOLS {
         let from_voxl = hyper::upgrade::on(&mut resp);
         if let Some(from_browser) = from_browser {
+            let app = app.clone();
             tokio::spawn(async move {
                 let (Ok(b), Ok(v)) = tokio::join!(from_browser, from_voxl) else {
                     return;
                 };
+                let started = now();
                 let _ = tokio::io::copy_bidirectional(&mut TokioIo::new(b), &mut TokioIo::new(v)).await;
+                if desktop {
+                    let secs = now() - started;
+                    app.db.record(
+                        Entry::new("desktop.close")
+                            .by(user.id)
+                            .ip(ip)
+                            .device(&id)
+                            .detail(crate::audit::duration(secs))
+                            .data(json!({ "session": session, "duration_s": secs })),
+                    );
+                }
             });
         }
     }

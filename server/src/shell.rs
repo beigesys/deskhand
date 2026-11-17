@@ -3,7 +3,9 @@
 
 use crate::auth::require;
 use crate::db::Role;
+use crate::audit::Entry;
 use crate::{esc, now, open_stream, Shared};
+use serde_json::json;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -48,10 +50,24 @@ pub async fn socket(
         cols: size.cols.unwrap_or(80),
         rows: size.rows.unwrap_or(24),
     };
-    app.db.audit(now(), Some(user.id), Some(&id), "shell.open", "");
+    let session = crate::random_hex(6);
+    let ip = crate::audit::current_ip();
+    app.db.record(Entry::new("shell.open").by(user.id).device(&id).data(json!({ "session": session })));
     ws.on_upgrade(move |browser| async move {
         match open_stream(&app, &id, kind).await {
-            Some(agent) => relay(browser, agent).await,
+            Some(agent) => {
+                let started = now();
+                relay(browser, agent).await;
+                let secs = now() - started;
+                app.db.record(
+                    Entry::new("shell.close")
+                        .by(user.id)
+                        .ip(ip)
+                        .device(&id)
+                        .detail(crate::audit::duration(secs))
+                        .data(json!({ "session": session, "duration_s": secs })),
+                );
+            }
             None => {
                 let mut browser = browser;
                 let _ = browser

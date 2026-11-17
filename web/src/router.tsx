@@ -8,6 +8,7 @@ import { JobsPage, JobPage } from '@/pages/jobs';
 import { ScriptsPage } from '@/pages/scripts-list';
 import { GroupsPage, EnrollPage, UsersPage, AuditPage } from '@/pages/admin';
 import { StylePage } from '@/pages/style';
+import { AccountPage } from '@/pages/account';
 
 const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
 
@@ -66,11 +67,12 @@ const enroll = createRoute({ getParentRoute: () => app, path: '/enroll', compone
 const users = createRoute({ getParentRoute: () => app, path: '/users', component: UsersPage });
 const audit = createRoute({ getParentRoute: () => app, path: '/audit', component: AuditPage });
 const style = createRoute({ getParentRoute: () => app, path: '/style', component: StylePage });
+const account = createRoute({ getParentRoute: () => app, path: '/account', component: AccountPage });
 
 const tree = root.addChildren([
 	login,
 	setup,
-	app.addChildren([dashboard, devices, device, jobs, job, scripts, script, groups, enroll, users, audit, style]),
+	app.addChildren([dashboard, devices, device, jobs, job, scripts, script, groups, enroll, users, audit, style, account]),
 ]);
 
 export const router = createRouter({ routeTree: tree, defaultPreload: 'intent' });

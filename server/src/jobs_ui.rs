@@ -211,7 +211,7 @@ pub async fn create_script(State(app): State<Shared>, headers: HeaderMap, body: 
     };
     match app.db.add_script(&name, shell, &script, timeout, user.id, now()) {
         Ok(id) => {
-            app.db.audit(now(), Some(user.id), None, "script.create", &format!("{id}: {name}"));
+            app.db.record(crate::audit::Entry::new("script.create").by(user.id).target("script", id).detail(name.as_str()));
             Redirect::to(&format!("/scripts/{id}")).into_response()
         }
         Err(e) => db_error(e),
@@ -230,7 +230,7 @@ pub async fn update_script(State(app): State<Shared>, headers: HeaderMap, Path(i
     match app.db.update_script(id, &name, shell, &script, timeout, now()) {
         Ok(0) => (StatusCode::NOT_FOUND, "no such script").into_response(),
         Ok(_) => {
-            app.db.audit(now(), Some(user.id), None, "script.update", &format!("{id}: {name}"));
+            app.db.record(crate::audit::Entry::new("script.update").by(user.id).target("script", id).detail(name.as_str()));
             Redirect::to(&format!("/scripts/{id}")).into_response()
         }
         Err(e) => db_error(e),
@@ -245,7 +245,7 @@ pub async fn delete_script(State(app): State<Shared>, headers: HeaderMap, Path(i
     let name = app.db.script(id).ok().flatten().map(|s| s.name).unwrap_or_default();
     match app.db.delete_script(id) {
         Ok(_) => {
-            app.db.audit(now(), Some(user.id), None, "script.delete", &format!("{id}: {name}"));
+            app.db.record(crate::audit::Entry::new("script.delete").by(user.id).target("script", id).detail(name.as_str()));
             Redirect::to("/scripts").into_response()
         }
         Err(e) => db_error(e),
@@ -374,7 +374,7 @@ pub(crate) fn db_fail(e: rusqlite::Error) -> (StatusCode, String) {
 /// Makes a job from the job form's fields (also what `/api/v1/jobs` turns its JSON into)
 /// and fires it if it runs now.
 pub(crate) fn create_job_from(app: &Shared, user: &User, f: &[(String, String)]) -> Result<i64, (StatusCode, String)> {
-    let source = get(&f, "source");
+    let source = get(f, "source");
     let (task, timeout_s, default_name) = if let Some(id) = source.strip_prefix("script:") {
         let Some(s) = id.parse().ok().and_then(|id| app.db.script(id).ok().flatten()) else {
             return Err(bad_request("pick a script"));
@@ -382,8 +382,8 @@ pub(crate) fn create_job_from(app: &Shared, user: &User, f: &[(String, String)])
         let name = s.name.clone();
         (Task::Script { script_id: Some(s.id), shell: s.shell, body: s.body }, s.timeout_s, name)
     } else {
-        let delay_s: u32 = get(&f, "delay_s").parse().unwrap_or(0).min(86400);
-        let message = Some(get(&f, "message").chars().take(512).collect::<String>()).filter(|m| !m.is_empty());
+        let delay_s: u32 = get(f, "delay_s").parse().unwrap_or(0).min(86400);
+        let message = Some(get(f, "message").chars().take(512).collect::<String>()).filter(|m| !m.is_empty());
         let action = match source.strip_prefix("action:") {
             Some("reboot") => Action::Reboot { delay_s, message },
             Some("shutdown") => Action::Shutdown { delay_s, message },
@@ -396,8 +396,8 @@ pub(crate) fn create_job_from(app: &Shared, user: &User, f: &[(String, String)])
         let name = action.name().to_owned();
         (Task::Action(action), ACTION_TIMEOUT, name)
     };
-    let target = match get(&f, "target") {
-        "group" => match get(&f, "group").parse::<i64>() {
+    let target = match get(f, "target") {
+        "group" => match get(f, "group").parse::<i64>() {
             Ok(g) => Target::Group(Some(g)),
             Err(_) => return Err(bad_request("pick a group")),
         },
@@ -413,7 +413,7 @@ pub(crate) fn create_job_from(app: &Shared, user: &User, f: &[(String, String)])
     }
     // Reboot and shutdown: typed confirmation, checked here as well as in the page.
     if let Task::Action(Action::Reboot { .. } | Action::Shutdown { .. }) = &task {
-        let confirm = get(&f, "confirm");
+        let confirm = get(f, "confirm");
         let ok = if devices.len() == 1 {
             app.db.device(&devices[0]).ok().flatten().is_some_and(|d: Device| {
                 confirm.eq_ignore_ascii_case(&d.hostname) || confirm.eq_ignore_ascii_case(&d.name)
@@ -430,9 +430,9 @@ pub(crate) fn create_job_from(app: &Shared, user: &User, f: &[(String, String)])
             return Err(bad_request(format!("to confirm, type {want}")));
         }
     }
-    let schedule = match get(&f, "when") {
+    let schedule = match get(f, "when") {
         "cron" => {
-            let expr = get(&f, "cron").to_owned();
+            let expr = get(f, "cron").to_owned();
             if let Err(e) = jobs::check_cron(&expr) {
                 return Err(bad_request(e));
             }
@@ -440,7 +440,7 @@ pub(crate) fn create_job_from(app: &Shared, user: &User, f: &[(String, String)])
         }
         _ => None,
     };
-    let hours: f64 = get(&f, "expires_h").parse().unwrap_or(24.0);
+    let hours: f64 = get(f, "expires_h").parse().unwrap_or(24.0);
     let expires_after = ((hours * 3600.0) as i64).clamp(60, 30 * 86400);
     let target_text = match (&target, devices.len()) {
         (Target::Devices(_), 1) => app.db.device_name(&devices[0]).ok().flatten().unwrap_or_default(),
@@ -454,7 +454,7 @@ pub(crate) fn create_job_from(app: &Shared, user: &User, f: &[(String, String)])
         (Target::Group(None), _) => "group".into(),
         (Target::All, _) => "all devices".into(),
     };
-    let name = Some(get(&f, "name").chars().take(200).collect::<String>())
+    let name = Some(get(f, "name").chars().take(200).collect::<String>())
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| format!("{default_name} on {target_text}"));
     let job = NewJob { name: name.clone(), task, timeout_s, target, schedule: schedule.clone(), expires_after, created_by: user.id };
@@ -463,9 +463,9 @@ pub(crate) fn create_job_from(app: &Shared, user: &User, f: &[(String, String)])
         Err(e) => return Err(db_fail(e)),
     };
     let when = schedule.as_deref().map_or("now".to_owned(), |s| format!("cron {s}"));
-    app.db.audit(now(), Some(user.id), None, "job.create", &format!("{id}: {name} ({when})"));
+    app.db.record(crate::audit::Entry::new("job.create").by(user.id).target("job", id).detail(format!("{name} ({when})")));
     if schedule.is_none() {
-        if let Err(e) = jobs::fire(&app, id) {
+        if let Err(e) = jobs::fire(app, id) {
             log::error!("firing job {id}: {e}");
         }
     }
@@ -731,7 +731,7 @@ async fn job_op(app: &Shared, headers: &HeaderMap, id: i64, op: &str) -> Respons
         log::error!("job {id} {op}: {e}");
         return (StatusCode::INTERNAL_SERVER_ERROR, "couldn't do that").into_response();
     }
-    app.db.audit(now(), Some(user.id), None, &format!("job.{op}"), &format!("{id}: {name}"));
+    app.db.record(crate::audit::Entry::new(format!("job.{op}")).by(user.id).target("job", id).detail(name.as_str()));
     if op == "delete" {
         Redirect::to("/jobs").into_response()
     } else {
