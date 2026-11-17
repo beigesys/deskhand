@@ -3,29 +3,20 @@ import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { CheckSquare, Download, FolderInput, Play, Plus, Power, Search, X } from 'lucide-react';
 import { api } from '@/api/client';
 import { keys, useAction, useCan, useDevices } from '@/api/hooks';
-import type { Device, Group } from '@/api/types';
+import type { Device, DeviceFilter, Group } from '@/api/types';
 import { AsyncCombobox, groupOption, NO_GROUP } from '@/components/ui/async-combobox';
 import { LoadMore } from '@/components/ui/load-more';
-import { AgentOutdated, AttentionFlag, barColor } from '@/components/devices';
+import { AgentOutdated, AttentionFlag, barColor, StateText, STATUS_LEGEND } from '@/components/devices';
 import { RunDialog } from '@/components/jobs';
 import { Button } from '@/components/ui/button';
 import { Chip, Empty, PageHeader } from '@/components/ui/display';
 import { Checkbox, Input, Select } from '@/components/ui/form';
-import { Dialog, DialogContent, DialogFooter } from '@/components/ui/overlay';
+import { Dialog, DialogContent, DialogFooter, Tip } from '@/components/ui/overlay';
 import { Table, Td, Th, Tr } from '@/components/ui/table';
 import { ago, cn, span } from '@/lib/utils';
 import type { DeviceSearch } from '@/router';
 
 const now = () => Math.floor(Date.now() / 1000);
-
-function StateText({ d }: { d: Device }) {
-	return (
-		<span className="inline-flex items-center gap-1.5 text-[12.5px]">
-			<span className="pip" />
-			{d.online ? 'Online' : `Offline ${span(now() - d.last_seen)}`}
-		</span>
-	);
-}
 
 /** Desktop and Shell for an online device; Wake for an offline one. */
 function RowActions({ d, onWake }: { d: Device; onWake: (d: Device) => void }) {
@@ -164,29 +155,51 @@ export function DevicesPage() {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [q]);
 
+	// "Every device matching": the bulk actions send the filters, not ids, so it reaches
+	// devices that aren't loaded yet. Any change to the filters ends it.
+	const filter: DeviceFilter = { q: search.q, group: search.group, status: search.status, os: search.os };
+	const filterKey = JSON.stringify(filter);
+	const [all, setAll] = React.useState(false);
+	React.useEffect(() => setAll(false), [filterKey]);
+
 	const list = devices.items;
 	const chosen = [...picked.values()];
-	const loadedChosen = list.filter((d) => selected.has(d.id)).length;
+	const count = all ? (devices.total ?? 0) : chosen.length;
+	const isChosen = (d: Device) => all || selected.has(d.id);
+	const loadedChosen = list.filter(isChosen).length;
 	const allChecked = list.length > 0 && loadedChosen === list.length ? true : loadedChosen ? 'indeterminate' : false;
-	const toggle = (d: Device) =>
+	const toggle = (d: Device) => {
+		if (all) {
+			// Out of "all matching": keep what's loaded, minus this one.
+			setAll(false);
+			setPicked(new Map(list.filter((x) => x.id !== d.id).map((x) => [x.id, x])));
+			return;
+		}
 		setPicked((m) => {
 			const n = new Map(m);
 			if (n.has(d.id)) n.delete(d.id);
 			else n.set(d.id, d);
 			return n;
 		});
+	};
+	const clear = () => {
+		setAll(false);
+		setPicked(new Map());
+	};
 	const endSelect = () => {
 		setSelecting(false);
-		setPicked(new Map());
+		clear();
 	};
 
 	const move = useAction(
-		async (group: number | null) => {
-			for (const d of chosen) await api.post(`/devices/${d.id}/move`, { group_id: group });
-		},
+		(group: number | null) =>
+			api.post<{ moved: number }>(
+				'/devices/move',
+				all ? { group_id: group, filter } : { group_id: group, devices: chosen.map((d) => d.id) },
+			),
 		{
 			invalidate: [keys.devices, keys.groups],
-			success: 'Moved',
+			success: (r) => `Moved ${r.moved} device${r.moved === 1 ? '' : 's'}`,
 			onSuccess: () => {
 				setMoving(false);
 				setMoveTo(null);
@@ -198,9 +211,17 @@ export function DevicesPage() {
 		success: (_, d) => `Wake sent to ${d.name}`,
 	});
 
-	const bulk = chosen.length > 0 && (
+	const total = devices.total;
+	const bulk = count > 0 && (
 		<>
-			<span className="text-xs font-medium">{chosen.length} selected</span>
+			<span className="text-xs font-medium tabular" data-testid="selected-count">
+				{all ? `All ${count} matching selected` : total != null ? `${count} of ${total} selected` : `${count} selected`}
+			</span>
+			{!all && total != null && total > count && (
+				<Button size="sm" variant="ghost" className="text-signal" onClick={() => setAll(true)}>
+					Select all {total} matching
+				</Button>
+			)}
 			{canRun && (
 				<>
 					<Button size="sm" variant="primary" onClick={() => setRun({})}>
@@ -216,7 +237,7 @@ export function DevicesPage() {
 					<FolderInput /> Move
 				</Button>
 			)}
-			<Button size="sm" variant="ghost" onClick={() => setPicked(new Map())}>
+			<Button size="sm" variant="ghost" onClick={clear}>
 				Clear
 			</Button>
 		</>
@@ -281,23 +302,32 @@ export function DevicesPage() {
 					aria-label="Group"
 					className="w-auto min-w-40 max-md:flex-1"
 				/>
-				<Select className="w-auto max-md:flex-1" value={search.os ?? ''} onChange={(e) => set({ os: e.target.value || undefined })} aria-label="OS">
-					<option value="">OS: Any</option>
-					<option value="windows">Windows</option>
-					<option value="linux">Linux</option>
-					<option value="macos">macOS</option>
-				</Select>
 				<Select
-					className="w-auto max-md:flex-1"
+					className="w-auto min-w-32 max-md:flex-1"
+					value={search.os ?? ''}
+					onChange={(v) => set({ os: v || undefined })}
+					aria-label="OS"
+					prefix="OS"
+					options={[
+						{ value: '', label: 'Any' },
+						{ value: 'windows', label: 'Windows' },
+						{ value: 'linux', label: 'Linux' },
+						{ value: 'macos', label: 'macOS' },
+					]}
+				/>
+				<Select<NonNullable<DeviceSearch['status']> | ''>
+					className="w-auto min-w-36 max-md:flex-1"
 					value={search.status ?? ''}
-					onChange={(e) => set({ status: (e.target.value || undefined) as DeviceSearch['status'] })}
+					onChange={(v) => set({ status: v || undefined })}
 					aria-label="Status"
-				>
-					<option value="">Status: Any</option>
-					<option value="online">Online</option>
-					<option value="offline">Offline</option>
-					<option value="attention">Needs attention</option>
-				</Select>
+					prefix="Status"
+					options={[
+						{ value: '', label: 'Any' },
+						{ value: 'online', label: 'Online' },
+						{ value: 'offline', label: 'Offline' },
+						{ value: 'attention', label: 'Needs attention' },
+					]}
+				/>
 				{bulk && (
 					<div className="ml-auto flex flex-wrap items-center gap-2 rounded border border-signal/50 bg-signal-soft px-2 py-1 max-md:hidden">
 						{bulk}
@@ -332,11 +362,11 @@ export function DevicesPage() {
 									key={d.id}
 									d={d}
 									selecting={selecting}
-									selected={selected.has(d.id)}
+									selected={isChosen(d)}
 									onToggle={() => toggle(d)}
 									onLongPress={() => {
 										setSelecting(true);
-										setPicked((m) => new Map(m).set(d.id, d));
+										if (!all) setPicked((m) => new Map(m).set(d.id, d));
 									}}
 									onWake={(d) => wake.mutate(d)}
 								/>
@@ -349,7 +379,8 @@ export function DevicesPage() {
 									<Th className="w-8 pl-4">
 										<Checkbox
 											checked={allChecked}
-											onCheckedChange={(v) =>
+											onCheckedChange={(v) => {
+												if (all) return clear();
 												setPicked((m) => {
 													const n = new Map(m);
 													for (const d of list) {
@@ -357,13 +388,17 @@ export function DevicesPage() {
 														else n.delete(d.id);
 													}
 													return n;
-												})
-											}
-											aria-label="Select all"
+												});
+											}}
+											aria-label="Select all shown"
 										/>
 									</Th>
 									<Th>Device</Th>
-									<Th>Status</Th>
+									<Th>
+										<Tip label={STATUS_LEGEND}>
+											<span className="cursor-help underline decoration-dotted underline-offset-2">Status</span>
+										</Tip>
+									</Th>
 									<Th>OS</Th>
 									<Th className="hidden lg:table-cell">IP</Th>
 									<Th className="hidden lg:table-cell">Group</Th>
@@ -376,11 +411,11 @@ export function DevicesPage() {
 								{list.map((d) => (
 									<Tr
 										key={d.id}
-										className={cn('status-bar', selected.has(d.id) && '[&>td]:bg-signal-soft')}
+										className={cn('status-bar', isChosen(d) && '[&>td]:bg-signal-soft')}
 										style={{ ['--bar' as string]: barColor(d) }}
 									>
 										<Td className="pl-4">
-											<Checkbox checked={selected.has(d.id)} onCheckedChange={() => toggle(d)} aria-label={`Select ${d.name}`} />
+											<Checkbox checked={isChosen(d)} onCheckedChange={() => toggle(d)} aria-label={`Select ${d.name}`} />
 										</Td>
 										<Td className="max-w-60 py-1">
 											<Link
@@ -437,10 +472,19 @@ export function DevicesPage() {
 				</div>
 			)}
 
-			<RunDialog open={!!run} onOpenChange={(v) => !v && setRun(null)} devices={chosen} initial={run ?? undefined} />
+			<RunDialog
+				open={!!run}
+				onOpenChange={(v) => !v && setRun(null)}
+				devices={all ? undefined : chosen}
+				filter={all ? filter : undefined}
+				initial={run ?? undefined}
+			/>
 
 			<Dialog open={moving} onOpenChange={setMoving}>
-				<DialogContent title={`Move ${chosen.length} device${chosen.length === 1 ? '' : 's'}`}>
+				<DialogContent
+					title={`Move ${count} device${count === 1 ? '' : 's'}`}
+					description={all ? "Every device matching the list's filters" : undefined}
+				>
 					<form
 						onSubmit={(e) => {
 							e.preventDefault();

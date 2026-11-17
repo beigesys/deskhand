@@ -15,7 +15,6 @@ export default defineConfig({
 			'/api': toServer,
 			'/auth': toServer,
 			'/d/': toServer,
-			'/classic': toServer,
 			'/agent': toServer,
 		},
 	},

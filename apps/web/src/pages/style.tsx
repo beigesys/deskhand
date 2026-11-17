@@ -50,6 +50,23 @@ function Swatch({ v, label }: { v: string; label: string }) {
 }
 
 /** Admin-only reference of the theme's tokens and components, for tuning the look. */
+function StyleSelect() {
+	const [v, setV] = React.useState('');
+	return (
+		<Select
+			value={v}
+			onChange={setV}
+			prefix="OS"
+			aria-label="Select"
+			options={[
+				{ value: '', label: 'Any' },
+				{ value: 'windows', label: 'Windows' },
+				{ value: 'linux', label: 'Linux' },
+			]}
+		/>
+	);
+}
+
 export function StylePage() {
 	const ok = useCan('admin');
 	const [checked, setChecked] = React.useState(true);
@@ -122,9 +139,7 @@ export function StylePage() {
 							<Input placeholder="Placeholder" />
 						</Field>
 						<Field label="Select">
-							<Select>
-								<option>Option</option>
-							</Select>
+							<StyleSelect />
 						</Field>
 						<Field label="Checkbox">
 							<span className="flex h-control items-center gap-2">

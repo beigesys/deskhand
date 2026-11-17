@@ -136,7 +136,6 @@ The device list shows each machine online or offline. **Desktop** opens its scre
   searchable, infinitely scrolling combobox (`AsyncCombobox`) with recent picks first.
 - Phones: a top bar with the page's title and main action, the sidebar as a drawer, and
   tables as stacked cards.
-- The server-rendered pages from before the web app are still at `/classic/`.
 
 Develop with the Rust server on 8080 and Vite's dev server in front of it:
 

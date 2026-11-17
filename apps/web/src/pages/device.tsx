@@ -17,8 +17,8 @@ import {
 	FolderInput,
 } from 'lucide-react';
 import { api } from '@/api/client';
-import { keys, useAction, useCan, useDevice } from '@/api/hooks';
-import type { Device, DeviceDetail, Group, Inventory, JobKind } from '@/api/types';
+import { keys, useAction, useCan, useDevice, useDeviceRuns } from '@/api/hooks';
+import type { Device, Group, Inventory, JobKind } from '@/api/types';
 import { AsyncCombobox, groupOption, NO_GROUP } from '@/components/ui/async-combobox';
 import { AgentOutdated, AttentionBadges, barColor } from '@/components/devices';
 import { confirmText, RunDialog } from '@/components/jobs';
@@ -26,6 +26,7 @@ import { Button } from '@/components/ui/button';
 import { Confirm } from '@/components/ui/confirm';
 import { Badge, Chip, Empty, KV, Meter, Panel, StatusBadge } from '@/components/ui/display';
 import { Field, Input } from '@/components/ui/form';
+import { LoadMore } from '@/components/ui/load-more';
 import {
 	Dialog,
 	DialogContent,
@@ -244,10 +245,12 @@ function Security({ inv }: { inv: Inventory }) {
 	);
 }
 
-function Runs({ data }: { data: DeviceDetail }) {
-	if (!data.runs.length) return <Empty>No jobs have run on this device.</Empty>;
+function Runs({ id }: { id: string }) {
+	const runs = useDeviceRuns(id);
+	if (runs.isLoading) return <Empty>Loading…</Empty>;
+	if (!runs.items.length) return <Empty>No jobs have run on this device.</Empty>;
 	return (
-		<Panel title="Recent runs" bodyClassName="p-0">
+		<Panel title="Runs" bodyClassName="p-0">
 			<Table>
 				<thead>
 					<tr>
@@ -259,7 +262,7 @@ function Runs({ data }: { data: DeviceDetail }) {
 					</tr>
 				</thead>
 				<tbody>
-					{data.runs.map((r) => (
+					{runs.items.map((r) => (
 						<Tr key={r.id}>
 							<Td>
 								<Link to="/jobs/$id" params={{ id: String(r.job_id) }} className="font-medium hover:text-signal">
@@ -276,6 +279,7 @@ function Runs({ data }: { data: DeviceDetail }) {
 					))}
 				</tbody>
 			</Table>
+			<LoadMore hasNextPage={!!runs.hasNextPage} isFetchingNextPage={runs.isFetchingNextPage} fetchNextPage={runs.fetchNextPage} />
 		</Panel>
 	);
 }
@@ -299,7 +303,7 @@ export function DevicePage() {
 		(v: { action: string; confirm?: string }) =>
 			api.post<{ id: number }>('/jobs', { action: v.action, devices: [id], confirm: v.confirm }),
 		{
-			invalidate: [keys.jobs, keys.device(id)],
+			invalidate: [keys.jobs, keys.deviceRuns(id)],
 			success: (_, v) => `${v.action} sent`,
 			onSuccess: () => setPower(null),
 		},
@@ -452,7 +456,7 @@ export function DevicePage() {
 						</TabsContent>
 					))}
 					<TabsContent value="jobs">
-						<Runs data={q.data} />
+						<Runs id={id} />
 					</TabsContent>
 				</div>
 			</Tabs>

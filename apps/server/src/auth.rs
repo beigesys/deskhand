@@ -10,7 +10,6 @@ use axum::extract::{ConnectInfo, Path, Query, Request, State};
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use axum::Form;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
@@ -60,6 +59,7 @@ pub fn user(app: &App, headers: &HeaderMap) -> Option<User> {
 
 /// The signed-in user if their role is at least `min`: otherwise the page to show instead
 /// (sign-in for nobody, 403 for too low a role).
+#[allow(clippy::result_large_err)] // a Response, built once per refused request
 pub fn require(app: &App, headers: &HeaderMap, min: Role) -> Result<User, Response> {
     match user(app, headers) {
         Some(u) if u.role >= min => Ok(u),
@@ -161,47 +161,12 @@ pub async fn check_origin(req: Request, next: Next) -> Response {
     next.run(req).await
 }
 
-// --- pages ---
-
-const PASSWORD_FORM: &str = r#"<form method="post" action="/login">
-<input name="username" placeholder="User name" autocomplete="username" required>
-<input type="password" name="password" placeholder="Password" autocomplete="current-password" required>
-<button>Sign in</button>
-</form>"#;
+// --- sign-in ---
 
 /// Password sign-in is on unless DESKHAND_PASSWORD_LOGIN=0 and some SSO provider is set up,
 /// so turning it off can never lock everyone out.
 pub fn password_login(app: &App) -> bool {
     app.password_login || app.sso.providers.is_empty()
-}
-
-pub async fn login_page(State(app): State<Shared>) -> Response {
-    if app.setup_token.lock().unwrap().is_some() {
-        return Redirect::to("/setup").into_response();
-    }
-    let sso: String = app
-        .sso
-        .providers
-        .iter()
-        .map(|p| {
-            format!(
-                r#"<a class="sso" href="/auth/{}/start">Sign in with {}</a>"#,
-                p.kind.key(),
-                p.kind.label()
-            )
-        })
-        .collect();
-    let password = match (password_login(&app), sso.is_empty()) {
-        (false, _) => "",
-        (true, true) => PASSWORD_FORM,
-        (true, false) => &format!(r#"<p class="or">or</p>{PASSWORD_FORM}"#),
-    };
-    Html(
-        include_str!("login.html")
-            .replace("{{sso}}", &sso)
-            .replace("{{password}}", password),
-    )
-    .into_response()
 }
 
 fn message(status: StatusCode, title: &str, body: &str) -> Response {
@@ -214,35 +179,6 @@ fn message(status: StatusCode, title: &str, body: &str) -> Response {
         ),
     )
         .into_response()
-}
-
-#[derive(serde::Deserialize)]
-pub struct LoginForm {
-    username: String,
-    password: String,
-}
-
-pub async fn login(
-    State(app): State<Shared>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    Form(f): Form<LoginForm>,
-) -> Response {
-    if !password_login(&app) {
-        return (StatusCode::FORBIDDEN, "password sign-in is off; use single sign-on").into_response();
-    }
-    let ip = client_ip(&app, &headers, peer);
-    if !app.login_limit.allow(ip) {
-        return Redirect::to("/login?slow").into_response();
-    }
-    let found = app.db.user_by_name(f.username.trim()).ok().flatten();
-    let hash = found.as_ref().map(|(_, h)| h.as_str()).unwrap_or(dummy_hash());
-    let ok = verify_password(&f.password, hash);
-    let Some((user, _)) = found.filter(|_| ok) else {
-        app.db.audit(now(), None, None, "login.failed", &format!("{} from {ip}", f.username.trim()));
-        return Redirect::to("/login?bad").into_response();
-    };
-    start_session(&app, &headers, &user, "login", &format!("password from {ip}"))
 }
 
 /// Starts a session for `user` and audits it: the Set-Cookie value that carries it.
@@ -263,76 +199,6 @@ fn start_session(app: &App, headers: &HeaderMap, user: &User, action: &str, deta
         Some(cookie) => ([(header::SET_COOKIE, cookie)], Redirect::to("/")).into_response(),
         None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
-}
-
-pub async fn logout(State(app): State<Shared>, headers: HeaderMap) -> Response {
-    if let Some(token) = cookie_value(&headers) {
-        if let Some(u) = user(&app, &headers) {
-            app.db.audit(now(), Some(u.id), None, "logout", "");
-        }
-        let _ = app.db.delete_session(&token);
-    }
-    (
-        [(header::SET_COOKIE, format!("{COOKIE}=; Path=/; Max-Age=0"))],
-        Redirect::to("/login"),
-    )
-        .into_response()
-}
-
-// --- first-run setup ---
-
-#[derive(serde::Deserialize)]
-pub struct SetupQuery {
-    token: Option<String>,
-}
-
-pub async fn setup_page(State(app): State<Shared>, Query(q): Query<SetupQuery>) -> Response {
-    if app.setup_token.lock().unwrap().is_none() {
-        return Redirect::to("/login").into_response();
-    }
-    let token = ui::esc(q.token.as_deref().unwrap_or(""));
-    Html(include_str!("setup.html").replace("{{token}}", &token)).into_response()
-}
-
-#[derive(serde::Deserialize)]
-pub struct SetupForm {
-    token: String,
-    username: String,
-    password: String,
-}
-
-pub async fn setup(
-    State(app): State<Shared>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    Form(f): Form<SetupForm>,
-) -> Response {
-    let ip = client_ip(&app, &headers, peer);
-    if !app.login_limit.allow(ip) {
-        return (StatusCode::TOO_MANY_REQUESTS, "too many attempts, wait a minute").into_response();
-    }
-    {
-        let mut setup = app.setup_token.lock().unwrap();
-        let Some(expected) = setup.as_deref() else {
-            return Redirect::to("/login").into_response();
-        };
-        if !crate::same(f.token.trim(), expected) {
-            return (StatusCode::FORBIDDEN, "wrong setup token; use the link the server printed").into_response();
-        }
-        let username = f.username.trim();
-        if username.is_empty() || f.password.len() < 8 {
-            return (StatusCode::BAD_REQUEST, "pick a user name and a password of 8+ characters").into_response();
-        }
-        if app.db.add_user(username, &hash_password(&f.password), Role::Admin, now()).is_err() {
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-        *setup = None;
-    }
-    let Some((user, _)) = app.db.user_by_name(f.username.trim()).ok().flatten() else {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    };
-    app.db.audit(now(), Some(user.id), None, "setup", "first admin created");
-    start_session(&app, &headers, &user, "login", &format!("setup from {ip}"))
 }
 
 // --- single sign-on ---

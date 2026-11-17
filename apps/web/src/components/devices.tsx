@@ -1,6 +1,7 @@
 import type { Device } from '@/api/types';
 import { Badge, Chip } from '@/components/ui/display';
-import { attentionLabel } from '@/lib/utils';
+import { Tip } from '@/components/ui/overlay';
+import { ago, attentionLabel, span } from '@/lib/utils';
 
 /** The color of a device's left status bar. */
 export function barColor(d: Pick<Device, 'online' | 'attention'>): string {
@@ -8,11 +9,50 @@ export function barColor(d: Pick<Device, 'online' | 'attention'>): string {
 	return d.attention.length ? 'var(--dh-warn)' : 'var(--dh-ok)';
 }
 
-export function StatusText({ d }: { d: Device }) {
-	return d.online ? (
-		<span className="text-ok">Online</span>
-	) : (
-		<span className="text-off">Offline</span>
+/** What the status colors mean, for a column header's tooltip. */
+export const STATUS_LEGEND = (
+	<span className="grid gap-1">
+		{(
+			[
+				['var(--dh-ok)', 'Online'],
+				['var(--dh-warn)', 'Online, needs attention'],
+				['var(--dh-off)', 'Offline'],
+			] as const
+		).map(([c, l]) => (
+			<span key={l} className="inline-flex items-center gap-1.5">
+				<span className="pip" style={{ ['--bar' as string]: c }} />
+				{l}
+			</span>
+		))}
+	</span>
+);
+
+/**
+ * A device's state as a pip and words that agree with it: green "Online", amber "Online ·
+ * attention", grey "Offline 3d". The tooltip says why.
+ */
+export function StateText({ d }: { d: Pick<Device, 'online' | 'attention' | 'last_seen'> }) {
+	const now = Math.floor(Date.now() / 1000);
+	const why = d.attention.map((a) => attentionLabel[a] ?? a).join(', ');
+	const tip = d.online
+		? why
+			? `Online; needs attention: ${why}`
+			: 'Online'
+		: `Offline; last seen ${ago(d.last_seen)}${why ? `. ${why}` : ''}`;
+	return (
+		<Tip label={tip}>
+			<span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[12.5px]" style={{ ['--bar' as string]: barColor(d) }}>
+				<span className="pip" />
+				{d.online ? (
+					<>
+						Online
+						{d.attention.length > 0 && <span className="text-warn">· attention</span>}
+					</>
+				) : (
+					<span className="text-muted">Offline {span(now - d.last_seen)}</span>
+				)}
+			</span>
+		</Tip>
 	);
 }
 

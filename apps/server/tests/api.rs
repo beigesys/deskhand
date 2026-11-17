@@ -213,6 +213,31 @@ fn api_v1() {
     assert_eq!(st, 400);
     assert!(e["error"].as_str().unwrap().contains("confirm"));
     assert_eq!(admin.post("/api/v1/jobs", json!({ "action": "reboot", "devices": [dev], "confirm": "test-host" })).0, 200);
+    // By filter: every device the list's filters match, resolved when the job is made.
+    let (st, fj) = admin.post("/api/v1/jobs", json!({ "script_id": sid, "filter": { "q": "test-h", "status": "offline" } }));
+    assert_eq!(st, 200, "{fj}");
+    assert_eq!(admin.get(&format!("/api/v1/jobs/{}", fj["id"])).1["counts"]["queued"], 1);
+    let (st, e) = admin.post("/api/v1/jobs", json!({ "script_id": sid, "filter": { "q": "nomatch" } }));
+    assert_eq!(st, 400);
+    assert!(e["error"].as_str().unwrap().contains("no devices"));
+    // The device's runs, newest first, a page at a time.
+    let (st, dr) = admin.get(&format!("/api/v1/devices/{dev}/runs?limit=2"));
+    assert_eq!(st, 200);
+    assert_eq!(dr["items"].as_array().unwrap().len(), 2);
+    assert_eq!(dr["items"][0]["job_id"], fj["id"]);
+    let cur = dr["next_cursor"].as_str().unwrap().to_owned();
+    let (_, dr2) = admin.get(&format!("/api/v1/devices/{dev}/runs?limit=2&cursor={cur}"));
+    assert_eq!(dr2["items"].as_array().unwrap().len(), 1);
+    assert_eq!(dr2["items"][0]["job_id"], jid);
+    assert!(dr2["next_cursor"].is_null());
+    // Bulk move by filter, then back by ids.
+    let (st, mv) = admin.post("/api/v1/devices/move", json!({ "group_id": gid, "filter": { "group": "none" } }));
+    assert_eq!((st, mv["moved"].as_i64()), (200, Some(1)));
+    assert_eq!(admin.get(&format!("/api/v1/devices?group={gid}")).1["total"], 1);
+    let (st, mv) = admin.post("/api/v1/devices/move", json!({ "group_id": null, "devices": [dev] }));
+    assert_eq!((st, mv["moved"].as_i64()), (200, Some(1)));
+    assert_eq!(admin.post("/api/v1/devices/move", json!({ "group_id": null })).0, 400);
+    assert_eq!(admin.post("/api/v1/devices/move", json!({ "group_id": 999, "devices": [dev] })).0, 400);
     assert_eq!(admin.post("/api/v1/jobs", json!({ "script_id": sid, "all": true, "cron": "not cron" })).0, 400);
     let (st, cronjob) = admin.post("/api/v1/jobs", json!({ "script_id": sid, "all": true, "cron": "0 3 * * *" }));
     assert_eq!(st, 200);
@@ -220,12 +245,12 @@ fn api_v1() {
     assert_eq!(admin.post(&format!("/api/v1/jobs/{cid}/disable"), json!({})).0, 200);
     assert_eq!(admin.get(&format!("/api/v1/jobs/{cid}")).1["job"]["enabled"], false);
     let (_, jobs) = admin.get("/api/v1/jobs");
-    assert_eq!(jobs["items"].as_array().unwrap().len(), 3);
+    assert_eq!(jobs["items"].as_array().unwrap().len(), 4);
     let (_, p1) = admin.get("/api/v1/jobs?limit=2");
     assert_eq!(p1["items"].as_array().unwrap().len(), 2);
     let cur = p1["next_cursor"].as_str().unwrap().to_owned();
     let (_, p2) = admin.get(&format!("/api/v1/jobs?limit=2&cursor={cur}"));
-    assert_eq!(p2["items"].as_array().unwrap().len(), 1);
+    assert_eq!(p2["items"].as_array().unwrap().len(), 2);
     assert!(p2["next_cursor"].is_null());
     assert_eq!(admin.get("/api/v1/scripts?q=uptime").1["items"].as_array().unwrap().len(), 1);
     assert_eq!(admin.get("/api/v1/scripts?q=nope").1["items"].as_array().unwrap().len(), 0);
@@ -290,8 +315,8 @@ fn api_v1() {
     assert_eq!(admin.post("/api/v1/logout", json!({})).0, 200);
     assert_eq!(admin.get("/api/v1/me").0, 401);
 
-    // The classic pages answer under /classic; the app owns the root.
-    assert_eq!(anon.get("/classic/jobs").0, 303);
+    // The classic pages are gone: old links land in the app.
+    assert_eq!(anon.get("/classic/jobs").0, 308);
     let (st, html) = anon.get("/devices/anything");
     assert_eq!(st, 200);
     assert!(html.as_str().unwrap().contains("<div id=\"root\">"));

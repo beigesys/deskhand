@@ -281,12 +281,17 @@ export function EnrollPage() {
 				</Field>
 				<div className="grid gap-3 sm:grid-cols-2">
 					<Field label="Expires in">
-						<Select name="hours" defaultValue="24">
-							<option value="1">1 hour</option>
-							<option value="24">1 day</option>
-							<option value="168">7 days</option>
-							<option value="720">30 days</option>
-						</Select>
+						<Select
+							name="hours"
+							defaultValue="24"
+							aria-label="Expires in"
+							options={[
+								{ value: '1', label: '1 hour' },
+								{ value: '24', label: '1 day' },
+								{ value: '168', label: '7 days' },
+								{ value: '720', label: '30 days' },
+							]}
+						/>
 					</Field>
 					<Field label="Max uses">
 						<Input name="max_uses" type="number" min={1} max={100000} defaultValue={1} required />
@@ -381,16 +386,13 @@ export function UsersPage() {
 										{u.id === me.data?.id && <span className="ml-1.5 text-xs text-muted">(you)</span>}
 									</Td>
 									<Td>
-										<Select
+										<Select<Role>
 											className="h-7 w-28"
 											value={u.role}
-											onChange={(e) => role.mutate({ id: u.id, role: e.target.value as Role })}
+											onChange={(r) => role.mutate({ id: u.id, role: r })}
 											aria-label={`Role of ${u.username}`}
-										>
-											{ROLES.map((r) => (
-												<option key={r}>{r}</option>
-											))}
-										</Select>
+											options={ROLES.map((r) => ({ value: r, label: r }))}
+										/>
 									</Td>
 									<Td>
 										<EmailCell id={u.id} email={u.email} />
@@ -459,11 +461,12 @@ export function UsersPage() {
 					<Input name="password" type="password" minLength={8} required={!sso} autoComplete="new-password" />
 				</Field>
 				<Field label="Role">
-					<Select name="role" defaultValue="operator">
-						{ROLES.map((r) => (
-							<option key={r}>{r}</option>
-						))}
-					</Select>
+					<Select<Role>
+						name="role"
+						defaultValue="operator"
+						aria-label="Role"
+						options={ROLES.map((r) => ({ value: r, label: r }))}
+					/>
 				</Field>
 			</FormDialog>
 			<Confirm

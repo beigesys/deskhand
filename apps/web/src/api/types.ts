@@ -102,7 +102,14 @@ export interface DeviceDetail {
 	device: Device;
 	inventory: Inventory | null;
 	inventory_at: number | null;
-	runs: DeviceRun[];
+}
+
+/** The device list's filters; bulk actions send them to mean "every device matching". */
+export interface DeviceFilter {
+	q?: string;
+	group?: string;
+	status?: 'online' | 'offline' | 'attention';
+	os?: string;
 }
 
 export interface Group {
@@ -225,6 +232,7 @@ export interface NewJob {
 	delay_s?: number;
 	message?: string;
 	devices?: string[];
+	filter?: DeviceFilter;
 	group_id?: number;
 	all?: boolean;
 	cron?: string;
